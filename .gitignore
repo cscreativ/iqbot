@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.py[cod]
+data/
+captures/
+.env
+playwright_state.json
+*.log

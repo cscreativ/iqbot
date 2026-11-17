@@ -1,0 +1,2471 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IQ Traderoom Live</title>
+  <link rel="manifest" href="/static/manifest.webmanifest" />
+  <meta name="theme-color" content="#0b0f17" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="IQ Live" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0b0f17; color: #e6e9ef; height: 100vh; display: flex; flex-direction: column;
+    }
+    header {
+      display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+      border-bottom: 1px solid #1c2431; background: #0e1420; flex-wrap: wrap;
+    }
+    header h1 { font-size: 14px; margin: 0 8px 0 0; font-weight: 600; letter-spacing: .3px; }
+    select, button {
+      background: #161d2b; color: #e6e9ef; border: 1px solid #263042; border-radius: 8px;
+      padding: 6px 10px; font-size: 13px; cursor: pointer;
+    }
+    button.active { background: #22c55e; border-color: #22c55e; color: #04140a; font-weight: 600; }
+    #zoom-in, #zoom-out { width: 34px; padding: 6px 0; text-align: center; font-weight: 700; }
+    .sep { width: 1px; height: 22px; background: #263042; margin: 0 4px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: #b6bfd0; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #f5a524; }
+    .dot.live { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    .dot.err { background: #ef4444; }
+    main { flex: 1; display: grid; grid-template-columns: 1fr 6px var(--aside-w, 280px); min-height: 0; }
+    #splitter { background: #1c2431; cursor: col-resize; width: 6px; touch-action: none; }
+    #splitter:hover, #splitter.dragging { background: #2a3648; }
+    #chart-wrap { position: relative; min-width: 0; min-height: 0; }
+    #chart { position: absolute; inset: 0; display: block; cursor: grab; touch-action: none; }
+    #chart.grabbing { cursor: grabbing; }
+    aside { border-left: 1px solid #1c2431; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow: auto; }
+    .price-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8b95a7; }
+    .price { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .price.up { color: #22c55e; } .price.down { color: #ef4444; }
+    .sub { font-size: 12px; color: #8b95a7; }
+    .candle-timer { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 4px; }
+    .candle-timer span { font-size: 12px; color: #8b95a7; }
+    .candle-timer b { font-size: 20px; color: #f5a524; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+    .candle-timer.closing b { color: #ef4444; }
+    .candle-timer.closing b { animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+    .stat { font-size: 13px; color: #b6bfd0; display: flex; justify-content: space-between; padding: 2px 0; }
+    .stat b { color: #e6e9ef; font-variant-numeric: tabular-nums; }
+    .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8b95a7; margin-bottom: 8px; }
+    .ohlc { font-size: 12px; font-variant-numeric: tabular-nums; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+    .ohlc span { color: #8b95a7; } .ohlc b { color: #e6e9ef; }
+    .signal { padding: 8px 10px; border-radius: 8px; font-size: 13px; background: #161d2b; margin-bottom: 6px; }
+    .signal.BUY { border-left: 3px solid #22c55e; }
+    .signal.SELL { border-left: 3px solid #ef4444; }
+    .empty { color: #6b7688; font-size: 13px; }
+    #error { display: none; margin: 8px 16px 0; padding: 8px 12px; border-radius: 8px; background: #3a1414; color: #ffb4b4; font-size: 12px; }
+    .wide { width: 100%; }
+    .order-btns { display: flex; gap: 8px; margin-top: 8px; }
+    .order-btns button { flex: 1; padding: 14px 8px; font-size: 16px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; }
+    #btn-buy { background: #22c55e; color: #04140a; }
+    #btn-sell { background: #ef4444; color: #ffffff; }
+    #pairs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+    .pair-card { background: #0f141d; border: 1px solid #1c2431; border-radius: 10px; padding: 6px 8px; }
+    .pair-card .pc-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-bottom: 2px; gap: 6px; }
+    .pair-card .pc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pair-card .pc-badge { font-weight: 700; padding: 1px 6px; border-radius: 6px; font-size: 11px; flex: 0 0 auto; }
+    .pair-card .pc-badge.buy { background: #22c55e; color: #04140a; }
+    .pair-card .pc-badge.sell { background: #ef4444; color: #ffffff; }
+    .pair-card .pc-badge.neutral { background: #374151; color: #cbd5e1; }
+    .pair-card canvas { width: 100%; height: 70px; display: block; }
+    .acct-toggle { display: flex; gap: 8px; flex: 1; }
+    .acct-opt { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 8px; border: 1px solid #263042; border-radius: 10px; cursor: pointer;
+      font-size: 14px; color: #b6bfd0; }
+    .acct-opt input { width: auto; margin: 0; accent-color: #22c55e; }
+    .acct-opt.active { border-color: #22c55e; color: #e6e9ef; background: #12251a; }
+    textarea, input[type="text"], input[type="password"], input[type="number"] {
+      width: 100%; background: #0e1420; color: #e6e9ef; border: 1px solid #263042;
+      border-radius: 8px; padding: 6px 8px; font-size: 12px; font-family: inherit; margin-top: 6px;
+    }
+    textarea { resize: vertical; min-height: 54px; }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+    .row > label { flex: 0 0 auto; font-size: 12px; color: #8b95a7; }
+    .row > input, .row > select, .row > button { flex: 1; }
+    .chk { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #b6bfd0; margin-top: 8px; }
+    .chk input { width: auto; }
+    #sel-overlay { display: none; position: absolute; inset: 0; cursor: crosshair; z-index: 5; }
+    #sel-rect { display: none; position: absolute; border: 1px solid #22c55e; background: rgba(34,197,94,0.12); pointer-events: none; z-index: 6; }
+    .dir-BUY { color: #22c55e; font-weight: 700; }
+    .dir-SELL { color: #ef4444; font-weight: 700; }
+    .dir-NONE { color: #8b95a7; }
+    details summary { cursor: pointer; font-size: 12px; color: #8b95a7; margin-top: 8px; }
+    #replay-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50; align-items: center; justify-content: center; }
+    #replay-modal.open { display: flex; }
+    .modal-box { width: min(780px, 94vw); max-height: 88vh; overflow: auto; background: #0e1420; border: 1px solid #263042; border-radius: 14px; padding: 16px; }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .modal-head button { background: transparent; border: none; color: #b6bfd0; font-size: 16px; cursor: pointer; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+    .grid3 label { font-size: 11px; color: #8b95a7; }
+    .metric { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; }
+    .metric b { color: #e6e9ef; font-variant-numeric: tabular-nums; }
+    .tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+    .tbl th, .tbl td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #1c2431; }
+    .tbl th { color: #8b95a7; font-weight: 500; }
+    .win { color: #22c55e; } .loss { color: #ef4444; }
+    .strat { padding: 6px 8px; border: 1px solid #263042; border-radius: 8px; margin-top: 6px; display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 12px; }
+    .strat button { padding: 4px 8px; }
+    footer { padding: 7px 16px; font-size: 11px; color: #6b7688; border-top: 1px solid #1c2431; }
+    @media (max-width: 820px) {
+      html, body { height: auto; }
+      body { min-height: 100vh; }
+      main { grid-template-columns: 1fr; }
+      #splitter { display: none; }
+      #chart-wrap { height: 56vh; min-height: 320px; }
+      aside { border-left: none; border-top: 1px solid #1c2431; overflow: visible; }
+      header { padding: 8px 10px; }
+      header h1 { flex: 1 0 100%; order: -1; }
+      .badge { margin-left: 0; }
+      .price { font-size: 28px; }
+      select, button { font-size: 15px; padding: 8px 10px; }
+      input[type="text"], input[type="password"], input[type="number"], textarea { font-size: 16px; }
+      .grid3 { grid-template-columns: 1fr 1fr; }
+      .modal-box { padding: 12px; }
+    }
+    /* Tableaux : restent dans l'ecran, defilement horizontal au besoin */
+    #results-list, #eval-table { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+    #results-list .tbl, #eval-table .tbl { width: 100%; min-width: 0; }
+    #orders-list .signal, #learnings-list .signal { word-break: break-word; }
+    /* Tablette */
+    @media (min-width: 821px) and (max-width: 1200px) {
+      main { grid-template-columns: 1fr 6px var(--aside-w, 300px); }
+      #chart-wrap { height: 62vh; }
+    }
+    /* Tres petits telephones */
+    @media (max-width: 420px) {
+      header h1 { font-size: 14px; }
+      .price { font-size: 32px; }
+      #candle-timer { font-size: 20px; }
+      .order-btns button { font-size: 15px; padding: 12px 6px; }
+      .acct-opt { padding: 7px 4px; font-size: 13px; }
+      .section-title { font-size: 13px; letter-spacing: .5px; }
+    }
+    /* Tables : police plus compacte sur mobile */
+    @media (max-width: 820px) {
+      .tbl { font-size: 11px; }
+      .tbl th, .tbl td { padding: 4px 5px; }
+    }
+
+    /* --- Mobile : bouton actualiser flottant + confort --- */
+    #refresh-toast {
+      position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
+      background: #12251a; color: #22c55e; border: 1px solid #22c55e;
+      padding: 8px 14px; border-radius: 999px; font-size: 13px; z-index: 80;
+      opacity: 0; transition: opacity .2s; pointer-events: none;
+    }
+    #refresh-toast.show { opacity: 1; }
+    #refresh-float { display: none; }
+    @media (max-width: 820px) {
+      #chart-wrap { height: 42vh; min-height: 230px; }
+      aside { padding: 12px 12px 90px; gap: 12px; }
+      .section-title { margin-top: 4px; }
+      .signal { font-size: 14px; }
+      footer { display: none; }
+      #refresh-float {
+        display: inline-flex; align-items: center; gap: 6px;
+        position: fixed; right: 14px; bottom: 16px; z-index: 70;
+        padding: 13px 18px; border: none; border-radius: 999px;
+        background: #22c55e; color: #04140a; font-weight: 800; font-size: 15px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.45);
+      }
+      #refresh-float:active { transform: scale(.97); }
+      #methods-list, #learnings-list { max-height: none; }
+      #orders-list, #results-list { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    }
+
+    #reject-banner {
+      display: none; position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+      width: min(92vw, 520px); height: 46px; overflow: hidden; z-index: 90;
+      border-radius: 10px; background: rgba(58,20,20,.96); border: 1px solid #ef4444;
+      color: #ffb4b4;
+    }
+    #reject-banner.show { display: block; }
+    #reject-banner span {
+      display: block; white-space: nowrap; text-align: center; font-weight: 800;
+      font-size: 13px; line-height: 46px; animation: rejectScroll 6s linear infinite;
+    }
+    @keyframes rejectScroll { from { transform: translateY(46px); } to { transform: translateY(-100%); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>IQ Traderoom &mdash; chart live</h1>
+    <select id="asset"></select>
+    <span class="sep"></span>
+    <button id="mode-candles" class="active">Bougies</button>
+    <button id="mode-line" hidden>Ligne</button>
+    <select id="tf" title="Intervalle des bougies">
+      <option value="300" selected>5 min</option>
+    </select>
+    <span class="sep"></span>
+    <button id="zoom-out" title="Dézoomer">&minus;</button>
+    <button id="zoom-in" title="Zoomer">+</button>
+    <button id="zoom-reset" hidden title="Auto : ~60 dernières bougies qui suivent le live">Auto</button>
+    <button id="replay-open" hidden title="Replay / backtest IA sur l'historique">Replay</button>
+    <button id="sound-test" title="Activer/tester le son">&#128276; Son</button>
+    <button id="refresh-top" title="Actualiser les données">&#8635; Actualiser</button>
+    <span class="badge"><span id="dot" class="dot"></span><span id="conn">connexion...</span></span>
+  </header>
+  <div id="error"></div>
+  <div id="pair-warn" class="sub" style="margin:8px 16px 0;color:#f5a524;"></div>
+  <main>
+    <div id="chart-wrap"><canvas id="chart"></canvas><div id="sel-overlay"></div><div id="sel-rect"></div></div>
+    <div id="splitter" title="Glisser pour redimensionner"></div>
+    <aside>
+      <div>
+        <div class="price-label">Dernier prix</div>
+        <div id="price" class="price">--</div>
+        <div id="sub" class="sub">Bougies 10 s</div>
+        <div id="candle-timer-box" class="candle-timer">
+          <span id="candle-close">Clôture bougie</span>
+          <b id="candle-timer">--:--</b>
+        </div>
+      </div>
+      <div hidden>
+        <div class="section-title">Dernière bougie</div>
+        <div class="ohlc">
+          <span>O</span><b id="o-open">--</b>
+          <span>H</span><b id="o-high">--</b>
+          <span>L</span><b id="o-low">--</b>
+          <span>C</span><b id="o-close">--</b>
+        </div>
+      </div>
+      <div hidden>
+        <div class="section-title">Statistiques</div>
+        <div class="stat"><span>Ticks</span><b id="s-ticks">0</b></div>
+        <div class="stat"><span>Bougies IQ</span><b id="s-candles">0</b></div>
+        <div class="stat"><span>Affichées</span><b id="s-shown">0</b></div>
+      </div>
+      <div>
+        <div class="section-title">Position — <span id="order-asset">--</span></div>
+        <div class="row"><label>Compte</label>
+          <div class="acct-toggle">
+            <label class="acct-opt active" id="acct-demo"><input type="radio" name="account-mode" value="demo" checked><span>Démo</span></label>
+            <label class="acct-opt" id="acct-real"><input type="radio" name="account-mode" value="real"><span>Réel</span></label>
+          </div>
+        </div>
+        <div id="account-note" class="sub" style="margin-top:4px;">Mode DÉMO (test)</div>
+        <div class="row"><label>Mise</label><input id="order-amount" type="number" min="1" step="1" value="1"></div>
+        <div class="order-btns">
+          <button id="btn-buy">ACHAT</button>
+          <button id="btn-sell">VENTE</button>
+        </div>
+        <div id="order-status" class="sub" style="margin-top:6px;"></div>
+        <div id="trade-signal" style="margin-top:6px;display:none;padding:10px;border-radius:10px;font-weight:800;font-size:15px;text-align:center;"></div>
+        <div class="section-title" style="margin-top:10px;">Positions en cours</div>
+        <div id="open-positions"><div class="empty">Aucune position en cours</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
+          <div id="results-summary" class="section-title" style="margin:0;"></div>
+          <button id="results-clear" style="padding:2px 8px;font-size:11px;">Effacer</button>
+        </div>
+        <div id="results-list"></div>
+        <div class="section-title" style="margin-top:10px;">Par jour</div>
+        <div id="results-daily"></div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="section-title" style="margin:0;">Apprentissage (bot)</div>
+          <button id="learn-clear" style="padding:4px 8px;font-size:11px;">Effacer tout</button>
+          <button id="learn-toggle" style="padding:4px 8px;font-size:11px;margin-left:6px;">Masquer</button>
+        </div>
+        <div id="learn-summary" class="sub"></div>
+        <div id="learn-live" class="sub" style="margin-top:2px;color:#22c55e;font-weight:600;"></div>
+        <div id="learn-profile" class="sub" style="margin-top:4px;"></div>
+        <div class="row" style="margin-top:6px;"><button id="learn-auto" class="wide">Bot : suivre mon style (OFF)</button></div>
+        <div id="learn-strategy" class="sub" style="margin-top:4px;"></div>
+        <div id="bot-stake" class="sub" style="margin-top:2px;"></div>
+        <div id="bot-scan" class="sub" style="margin-top:2px;"></div>
+        <div id="bot-pairs" class="sub" style="margin-top:2px;"></div>
+        <div class="section-title" style="margin-top:8px;">Méthodes actives</div>
+        <div id="methods-list" class="sub"><div class="empty">…</div></div>
+        <div id="learnings-list" style="margin-top:6px;"><div class="empty">Le bot observe…</div></div>
+      </div>
+      <div>
+        <div class="section-title">Évaluation des méthodes</div>
+        <div id="eval-summary" class="sub"></div>
+        <div id="eval-table" style="margin-top:6px;"></div>
+      </div>
+      <div>
+        <div class="section-title">Simulation (mise fixe)</div>
+        <div class="row"><label>Mise $</label><input id="sim-stake" type="number" min="1" step="1" value="10"></div>
+        <div id="sim-summary" class="sub" style="margin-top:4px;"></div>
+        <div id="sim-table" style="margin-top:6px;"></div>
+      </div>
+      <div hidden>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div class="section-title" style="margin:0;">Signaux</div>
+          <button id="signals-clear" style="padding:2px 8px;font-size:11px;">Effacer</button>
+        </div>
+        <div id="signals"><div class="empty">Aucun signal</div></div>
+      </div>
+      <div hidden>
+        <div class="section-title">IA — Pattern</div>
+        <button id="select-zone" class="wide">Sélectionner la zone à capturer</button>
+        <div id="sel-info" class="sub" style="margin-top:6px;">Aucune zone sélectionnée</div>
+        <img id="sel-preview" alt="" style="display:none;width:100%;border:1px solid #263042;border-radius:8px;margin-top:8px;" />
+        <textarea id="ai-prompt" placeholder="Décris le schéma à surveiller (ex: double bottom, triangle ascendant, doji de retournement…)"></textarea>
+        <div class="row"><label>Confiance</label><input id="ai-conf" type="number" min="0" max="1" step="0.05" value="0.7"></div>
+        <label class="chk"><input id="ai-trade" type="checkbox"> Passer l'ordre (démo)</label>
+        <div class="row">
+          <button id="ai-analyze">Analyser</button>
+          <select id="ai-watch">
+            <option value="0">Surveil: off</option>
+            <option value="10">10 s</option>
+            <option value="30">30 s</option>
+            <option value="60">60 s</option>
+          </select>
+        </div>
+        <div id="ai-result" class="empty" style="margin-top:8px;">Aucune analyse</div>
+        <details>
+          <summary>Config IA</summary>
+          <div class="row"><label>URL</label><input id="ai-base" type="text" placeholder="https://api.openai.com/v1"></div>
+          <div class="row"><label>Modèle</label><input id="ai-model" type="text" placeholder="gpt-4o-mini"></div>
+          <div class="row"><label>Clé</label><input id="ai-key" type="password" placeholder="clé API"></div>
+          <button id="ai-save" class="wide" style="margin-top:8px;">Enregistrer</button>
+        </details>
+      </div>
+      <div hidden>
+        <div class="section-title">Séquence live</div>
+        <div class="row"><label>TF</label><select id="live-tf"><option value="15">15 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></div>
+        <div class="row">
+          <button id="live-start">Démarrer</button>
+          <button id="live-stop">Arrêter</button>
+        </div>
+        <div id="live-status" class="sub" style="margin-top:6px;">Arrêtée</div>
+      </div>
+      <div hidden>
+        <div class="section-title">Bot formations de bougies</div>
+        <div class="row"><label>Source</label><select id="pat-source"><option value="ticks" selected>ticks</option><option value="candles">serveur</option></select></div>
+        <div class="row"><label>Bougies</label><select id="pat-interval"><option value="300" selected>5 min</option></select></div>
+        <div class="row"><label>Force</label><input id="pat-strength" type="number" min="0" max="1" step="0.05" value="0.5"></div>
+        <div class="row"><label>Mise</label><input id="pat-amount" type="number" min="0.1" step="0.1" value="1"></div>
+        <label class="chk"><input id="pat-trade" type="checkbox"> Passer l'ordre (démo)</label>
+        <label class="chk"><input id="pat-trend" type="checkbox"> Filtre tendance</label>
+        <div class="row">
+          <button id="pat-start">Démarrer</button>
+          <button id="pat-stop">Arrêter</button>
+        </div>
+        <div id="pat-status" class="sub" style="margin-top:6px;">Arrêté</div>
+      </div>
+      <div>
+        <div class="section-title">Paires surveillées — live</div>
+        <div id="pairs-grid"></div>
+      </div>
+    </aside>
+  </main>
+  <footer></footer>
+
+  <div id="replay-modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <b>Replay / Backtest IA</b>
+        <button id="replay-close" title="Fermer">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="sub">L'IA rejoue l'historique 5 min pas à pas (fenêtre passée uniquement), détecte les moments d'entrée, simule les positions et mesure la performance. Si la méthode est bonne (≥ 5 trades, ≥ 55 % de réussite, PnL &gt; 0), elle est enregistrée.</div>
+        <textarea id="rp-prompt" placeholder="Décris la méthode à tester, ou clique sur « Générer une méthode IA »"></textarea>
+        <button id="rp-generate" class="wide" style="margin-top:8px;">Générer une méthode IA</button>
+        <label class="chk"><input id="rp-autorun" type="checkbox" checked> Lancer le replay automatiquement après génération</label>
+        <div class="grid3">
+          <div><label>Timeframe scalp</label><select id="rp-tf"><option value="15">15 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></div>
+          <div><label>Bougies d'historique</label><input id="rp-lookback" type="number" value="200"></div>
+          <div><label>Fenêtre IA</label><input id="rp-window" type="number" value="40"></div>
+          <div><label>Pas (bougies)</label><input id="rp-step" type="number" value="4"></div>
+          <div><label>Étapes max</label><input id="rp-steps" type="number" value="10"></div>
+          <div><label>Horizon (sortie)</label><input id="rp-horizon" type="number" value="6"></div>
+          <div><label>Confiance min</label><input id="rp-conf" type="number" step="0.05" value="0.55"></div>
+        </div>
+        <button id="rp-run" class="wide" style="margin-top:10px;">Lancer le replay</button>
+        <div id="rp-progress" class="sub" style="margin-top:8px;"></div>
+        <div id="rp-results"></div>
+        <details open style="margin-top:10px;"><summary>Méthodes enregistrées</summary><div id="rp-list"></div></details>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const canvas = document.getElementById("chart");
+      const ctx = canvas.getContext("2d");
+      const wrap = document.getElementById("chart-wrap");
+      const query = new URLSearchParams(location.search);
+      const queryAsset = query.get("asset");
+
+      const PAD = { l: 10, r: 74, t: 14, b: 28 };
+      const AUTO_CANDLES = 60;   // fenetre par defaut : 60 bougies visibles
+      const AUTO_LINE = 400;     // fenetre par defaut en mode ligne
+
+      const state = {
+        asset: queryAsset || "EURUSD-OTC",
+        ticks: [],
+        mode: "candles",   // "candles" | "line"
+        tf: 300,           // intervalle des bougies (s)
+        view: null,        // { t0, t1 } fenêtre temporelle, null = tout afficher
+        follow: false,     // suivre le live quand on est collé au bord droit
+        serverCandles: [], // bougies 5 min reelles (historique IQ + live)
+        selRegion: null,   // zone capturee (coordonnees CSS)
+        lastMapping: null, // mapping x <-> temps du dernier rendu
+        watchTimer: null,
+        analyzing: false,
+        ws: null,
+        lastPrice: null,
+        lastTickAt: 0,
+        liveAssets: new Set(),
+        lastLivePrimary: null,
+      };
+
+      function showError(msg) {
+        const el = document.getElementById("error");
+        el.textContent = msg || "";
+        el.style.display = msg ? "block" : "none";
+      }
+      function setStatus(text, cls) {
+        document.getElementById("conn").textContent = text;
+        document.getElementById("dot").className = "dot" + (cls ? " " + cls : "");
+      }
+      function fmtPrice(v) {
+        if (v === null || v === undefined || isNaN(v)) return "--";
+        const a = Math.abs(v);
+        if (a >= 1000) return v.toFixed(2);
+        if (a >= 1) return v.toFixed(5);
+        return v.toFixed(6);
+      }
+      function shortTime(ts) {
+        try { return new Date(ts * 1000).toLocaleTimeString("fr-FR", { hour12: false }); }
+        catch (e) { return ""; }
+      }
+      function axisLabel(ts, spanSec) {
+        try {
+          const d = new Date(ts * 1000);
+          const p = function (n) { return (n < 10 ? "0" : "") + n; };
+          if (spanSec > 36 * 3600) {
+            return p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+          }
+          return d.toLocaleTimeString("fr-FR", { hour12: false });
+        } catch (e) { return ""; }
+      }
+      function setPrice(price, prev) {
+        const el = document.getElementById("price");
+        el.textContent = fmtPrice(price);
+        if (prev !== null && prev !== undefined) el.className = "price " + (price >= prev ? "up" : "down");
+      }
+      function tfLabel(s) { return s % 60 === 0 ? (s / 60) + " min" : s + " s"; }
+
+      function updateCandleTimer() {
+        const tf = Math.max(1, state.tf || 300);
+        const now = Date.now() / 1000;
+        const end = (Math.floor(now / tf) + 1) * tf; // prochaine frontiere = cloture bougie
+        const remain = Math.max(0, end - now);
+        const m = Math.floor(remain / 60);
+        const s = Math.floor(remain % 60);
+        const pad = function (n) { return (n < 10 ? "0" : "") + n; };
+        const el = document.getElementById("candle-timer");
+        const label = document.getElementById("candle-close");
+        const box = document.getElementById("candle-timer-box");
+        if (!el) return;
+        el.textContent = pad(m) + ":" + pad(s);
+        try {
+          const closeT = new Date(end * 1000).toLocaleTimeString("fr-FR", { hour12: false });
+          if (label) label.textContent = "Clôture à " + closeT;
+        } catch (e) { /* ignore */ }
+        if (box) box.classList.toggle("closing", remain <= 30);
+      }
+      function plotWidth() { return Math.max(1, wrap.clientWidth - PAD.l - PAD.r); }
+
+      // Bougies japonaises (OHLC) reconstruites a partir des ticks.
+      function buildCandles(interval) {
+        const ticks = state.ticks;
+        if (!ticks.length) return [];
+        const map = new Map();
+        for (const t of ticks) {
+          const bucket = Math.floor(t.ts / interval) * interval;
+          let c = map.get(bucket);
+          if (!c) { c = { ts: bucket, open: t.price, high: t.price, low: t.price, close: t.price }; map.set(bucket, c); }
+          else { if (t.price > c.high) c.high = t.price; if (t.price < c.low) c.low = t.price; c.close = t.price; }
+        }
+        return Array.from(map.values()).sort(function (a, b) { return a.ts - b.ts; });
+      }
+
+      function trimSeries(candles, interval) {
+        // Garde la derniere serie exploitable : on coupe sur les trous de temps
+        // (week-end/session) ET sur les sauts de prix aberrants (donnees
+        // corrompues) qui ecraseraient l'echelle verticale et le zoom.
+        if (!candles || candles.length < 2) return candles || [];
+        const maxGap = Math.max(interval * 2, 60);
+        const changes = [];
+        for (let i = 1; i < candles.length; i++) {
+          const prev = candles[i - 1].close;
+          if (prev) changes.push(Math.abs(candles[i].close - prev) / Math.abs(prev));
+        }
+        changes.sort(function (a, b) { return a - b; });
+        const median = changes.length ? changes[Math.floor(changes.length / 2)] : 0;
+        const jump = Math.max(median * 15, 0.005); // 0.5% mini
+        let start = candles.length - 1;
+        while (start > 0) {
+          const a = candles[start - 1], b = candles[start];
+          if (b.ts - a.ts > maxGap) break;
+          const prev = a.close;
+          const rel = prev ? Math.abs(b.close - prev) / Math.abs(prev) : 0;
+          if (rel > jump) break;
+          start--;
+        }
+        let seg = candles.slice(start);
+        // Retire les bougies a meche aberrante (ex: transition donnees corrompues)
+        const ranges = [];
+        for (const c of seg) { const r = c.high - c.low; if (r > 0) ranges.push(r); }
+        ranges.sort(function (a, b) { return a - b; });
+        const medRange = ranges.length ? ranges[Math.floor(ranges.length / 2)] : 0;
+        if (medRange > 0) {
+          const maxRange = medRange * 12;
+          const clean = seg.filter(function (c) { return (c.high - c.low) <= maxRange; });
+          if (clean.length) seg = clean;
+        }
+        return seg;
+      }
+
+      function currentSeries() {
+        const useCandles = state.mode === "candles";
+        let candles = [];
+        if (useCandles) {
+          const sc = state.serverCandles;
+          const lastTs = sc.length ? Number(sc[sc.length - 1].ts) : 0;
+          const fresh = sc.length >= 5 && (Date.now() / 1000 - lastTs) <= 900;
+          if (state.tf >= 300 && fresh) candles = sc;
+          else candles = buildCandles(state.tf);
+          candles = trimSeries(candles, state.tf);
+        }
+        return { useCandles: useCandles, candles: candles, data: useCandles ? candles : state.ticks };
+      }
+
+      function fullView(data) {
+        if (!data.length) return null;
+        let t0 = data[0].ts, t1 = data[data.length - 1].ts;
+        if (t1 <= t0) { t0 = t0 - Math.max(1, state.tf) / 2; t1 = t1 + Math.max(1, state.tf) / 2; }
+        return { t0: t0, t1: t1 };
+      }
+
+      function fitCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const w = Math.max(1, wrap.clientWidth);
+        const h = Math.max(1, wrap.clientHeight);
+        if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+          canvas.width = Math.floor(w * dpr); canvas.height = Math.floor(h * dpr);
+          canvas.style.width = w + "px"; canvas.style.height = h + "px";
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { w: w, h: h };
+      }
+
+      let _raf = 0;
+      function scheduleDraw() {
+        if (_raf) return;
+        _raf = requestAnimationFrame(function () { _raf = 0; draw(); });
+      }
+
+      let audioCtx = null;
+      let soundOn = true;
+      function unlockAudio() {
+        try {
+          if (!audioCtx) {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            audioCtx = new AC();
+          }
+          if (audioCtx.state === "suspended") audioCtx.resume();
+        } catch (e) { /* ignore */ }
+      }
+      function playBeep(up) {
+        try {
+          if (!soundOn) return;
+          unlockAudio();
+          if (!audioCtx) return;
+          const o = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          o.connect(g); g.connect(audioCtx.destination);
+          o.frequency.value = up ? 880 : 440;
+          g.gain.value = 0.1;
+          o.start();
+          setTimeout(function () { try { o.stop(); } catch (e) { /* ignore */ } }, 220);
+        } catch (e) { /* ignore */ }
+      }
+      document.addEventListener("touchstart", unlockAudio, { once: true });
+      document.addEventListener("click", unlockAudio, { once: true });
+
+      function drawMessage(w, h, text) {
+        ctx.fillStyle = "#0b0f17"; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = "#6b7688"; ctx.font = "14px -apple-system, sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(text, w / 2, h / 2); ctx.textAlign = "left";
+      }
+
+      function updateOhlc(candles) {
+        if (!candles.length) {
+          ["o-open", "o-high", "o-low", "o-close"].forEach(function (id) { document.getElementById(id).textContent = "--"; });
+          return;
+        }
+        const c = candles[candles.length - 1];
+        document.getElementById("o-open").textContent = fmtPrice(c.open);
+        document.getElementById("o-high").textContent = fmtPrice(c.high);
+        document.getElementById("o-low").textContent = fmtPrice(c.low);
+        document.getElementById("o-close").textContent = fmtPrice(c.close);
+      }
+
+      function defaultWindow(data, useCandles) {
+        // Fenetre par defaut : les ~60 dernieres bougies + une marge a droite,
+        // alignee sur le live. Recalculee a chaque rendu => suit le flux.
+        const want = useCandles ? AUTO_CANDLES : AUTO_LINE;
+        const n = data.length;
+        const start = Math.max(0, n - want);
+        let t0 = data[start].ts;
+        let t1 = data[n - 1].ts + Math.max(1, state.tf);
+        if (t1 <= t0) t1 = t0 + Math.max(1, state.tf);
+        return { t0: t0, t1: t1 };
+      }
+
+      function agsAtr(candles, len) {
+        const trs = []; let prev = null;
+        for (const c of candles) {
+          const tr = prev === null ? (c.high - c.low) : Math.max(c.high - c.low, Math.abs(c.high - prev), Math.abs(c.low - prev));
+          trs.push(tr); prev = c.close;
+        }
+        const tail = trs.slice(-len);
+        return tail.length ? tail.reduce(function (a, b) { return a + b; }, 0) / tail.length : 0;
+      }
+      function agsSetup(c, atr) {
+        if (!c) return "";
+        const body = Math.abs(c.close - c.open), up = c.high - Math.max(c.open, c.close), lo = Math.min(c.open, c.close) - c.low;
+        const minBody = atr * 0.15;
+        if (c.close > c.open && up >= Math.max(body, 1e-9) * 2.0 && body >= minBody) return "BUY";
+        if (c.close < c.open && lo >= Math.max(body, 1e-9) * 2.0 && body >= minBody) return "SELL";
+        return "";
+      }
+      function agsRebound(dir, open, ticks, ts, observe) {
+        let seen = false;
+        for (const t of ticks) {
+          const el = t.ts - ts;
+          if (el < 0 || el > observe) continue;
+          const p = t.price;
+          if (dir === "BUY") {
+            if (!seen && p < open) seen = true;
+            else if (seen && p > open) return true;
+          } else {
+            if (!seen && p > open) seen = true;
+            else if (seen && p < open) return true;
+          }
+        }
+        return false;
+      }
+
+      function draw() {
+        const size = fitCanvas();
+        const w = size.w, h = size.h;
+        const plotW = w - PAD.l - PAD.r;
+        const plotH = h - PAD.t - PAD.b;
+        if (plotW <= 0 || plotH <= 0) return;
+
+        ctx.fillStyle = "#0b0f17"; ctx.fillRect(0, 0, w, h);
+
+        const s = currentSeries();
+        const useCandles = s.useCandles;
+        const data = s.data;
+        const full = fullView(data);
+
+        document.getElementById("sub").textContent = useCandles ? ("Bougies " + tfLabel(state.tf)) : "Ligne de prix";
+        updateOhlc(s.candles);
+
+        if (!data.length || !full) {
+          drawMessage(w, h, "En attente de données pour " + state.asset + "…");
+          document.getElementById("s-shown").textContent = 0;
+          return;
+        }
+
+        // fenetre visible
+        let view = state.view;
+        if (view && state.follow) {
+          const span = view.t1 - view.t0;
+          view = { t0: full.t1 - span, t1: full.t1 };
+          state.view = view;
+        }
+        if (!view) {
+          // Fenetre par defaut : les ~60 dernieres bougies, alignee sur le live.
+          view = defaultWindow(data, useCandles);
+        }
+        if (view.t1 <= view.t0) { view.t1 = view.t0 + Math.max(1, state.tf); }
+        const t0 = view.t0, t1 = view.t1;
+        state.lastMapping = { t0: t0, t1: t1, left: PAD.l, width: plotW };
+
+        // elements visibles (+1 de marge pour la ligne)
+        const vis = [];
+        for (let i = 0; i < data.length; i++) {
+          const d = data[i];
+          if (d.ts >= t0 && d.ts <= t1) vis.push(d);
+        }
+        document.getElementById("s-shown").textContent = vis.length;
+
+        if (!vis.length) { drawMessage(w, h, "Aucune donnée dans cette zone — clique sur « Auto »"); return; }
+
+        let min = Infinity, max = -Infinity;
+        if (useCandles) {
+          for (const c of vis) { if (c.low < min) min = c.low; if (c.high > max) max = c.high; }
+        } else {
+          for (const t of vis) { if (t.price < min) min = t.price; if (t.price > max) max = t.price; }
+        }
+        if (!isFinite(min) || !isFinite(max)) { drawMessage(w, h, "Données invalides"); return; }
+        if (min === max) { min -= 0.0005; max += 0.0005; }
+        const padY = (max - min) * 0.08; min -= padY; max += padY;
+
+        function xForTs(ts) { return PAD.l + (ts - t0) / (t1 - t0) * plotW; }
+        function yFor(v) { return PAD.t + (max - v) / (max - min) * plotH; }
+
+        // grille + axe des prix
+        ctx.font = "11px -apple-system, sans-serif";
+        ctx.textBaseline = "middle";
+        for (let i = 0; i <= 4; i++) {
+          const v = min + (max - min) * (i / 4);
+          const y = yFor(v);
+          ctx.strokeStyle = "#141b27";
+          ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(PAD.l + plotW, y); ctx.stroke();
+          ctx.fillStyle = "#6b7688";
+          ctx.fillText(fmtPrice(v), PAD.l + plotW + 8, y);
+        }
+
+        if (useCandles) {
+          const cw = Math.max(1, Math.min(42, (state.tf / (t1 - t0)) * plotW * 0.7));
+          for (let i = 0; i < vis.length; i++) {
+            const c = vis[i];
+            const cx = xForTs(c.ts);
+            if (cx < PAD.l - cw || cx > PAD.l + plotW + cw) continue;
+            const up = c.close >= c.open;
+            const color = up ? "#22c55e" : "#ef4444";
+            ctx.strokeStyle = color; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(cx, yFor(c.high)); ctx.lineTo(cx, yFor(c.low)); ctx.stroke();
+            ctx.fillStyle = color;
+            const yO = yFor(c.open), yC = yFor(c.close);
+            const top = Math.min(yO, yC), hgt = Math.max(1, Math.abs(yC - yO));
+            ctx.fillRect(cx - cw / 2, top, cw, hgt);
+            if (i === vis.length - 1) {
+              ctx.strokeStyle = "rgba(230,233,239,0.5)";
+              ctx.strokeRect(cx - cw / 2 - 0.5, top - 0.5, cw + 1, hgt + 1);
+            }
+          }
+          // --- Marqueurs AGS (PREP + signal) ---
+          if (vis.length >= 3) {
+            const atr = agsAtr(vis.slice(0, -1), 14);
+            for (let i = 0; i < vis.length - 1; i++) {
+              const cc = vis[i];
+              const dir = agsSetup(cc, atr);
+              if (!dir) continue;
+              const mx = xForTs(cc.ts);
+              if (mx < PAD.l || mx > PAD.l + plotW) continue;
+              if (dir === "BUY") {
+                const y = yFor(cc.low) + 8;
+                ctx.beginPath(); ctx.moveTo(mx, y + 7); ctx.lineTo(mx - 5, y); ctx.lineTo(mx + 5, y); ctx.closePath();
+                ctx.fillStyle = "#22d3ee"; ctx.fill();
+              } else {
+                const y = yFor(cc.high) - 8;
+                ctx.beginPath(); ctx.moveTo(mx, y - 7); ctx.lineTo(mx - 5, y); ctx.lineTo(mx + 5, y); ctx.closePath();
+                ctx.fillStyle = "#f59e0b"; ctx.fill();
+              }
+            }
+            const lastC = vis[vis.length - 1], prevC = vis[vis.length - 2];
+            const sdir = agsSetup(prevC, atr);
+            if (sdir && agsRebound(sdir, lastC.open, state.ticks, lastC.ts, 45)) {
+              const mx = xForTs(lastC.ts);
+              const ly = sdir === "BUY" ? yFor(lastC.low) + 28 : yFor(lastC.high) - 28;
+              const label = sdir === "BUY" ? "AGS BUY" : "AGS SELL";
+              ctx.font = "bold 11px -apple-system, sans-serif";
+              const tw = ctx.measureText(label).width + 10;
+              ctx.fillStyle = sdir === "BUY" ? "#22c55e" : "#ef4444";
+              ctx.fillRect(mx - tw / 2, ly - 9, tw, 18);
+              ctx.fillStyle = sdir === "BUY" ? "#04140a" : "#ffffff";
+              ctx.textAlign = "center"; ctx.textBaseline = "middle";
+              ctx.fillText(label, mx, ly);
+              ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+            }
+            // --- PRESSION en direct sur la bougie en cours (Pine: PRESSION) ---
+            if (sdir) {
+              let pressure = false;
+              for (const t of state.ticks) {
+                const el = t.ts - lastC.ts;
+                if (el < 0 || el > 45) continue;
+                if (sdir === "BUY" && t.price < lastC.open) { pressure = true; break; }
+                if (sdir === "SELL" && t.price > lastC.open) { pressure = true; break; }
+              }
+              if (pressure) {
+                const mx = xForTs(lastC.ts);
+                const py = sdir === "BUY" ? yFor(lastC.low) + 16 : yFor(lastC.high) - 16;
+                const pcol = sdir === "BUY" ? "#ef4444" : "#84cc16";
+                ctx.beginPath(); ctx.arc(mx, py, 5, 0, Math.PI * 2);
+                ctx.fillStyle = pcol; ctx.fill();
+                ctx.font = "9px -apple-system, sans-serif";
+                ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText("PRESSION", mx, sdir === "BUY" ? py + 13 : py - 13);
+                ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+              }
+            }
+          }
+        } else {
+          const pts = [];
+          for (const t of vis) pts.push([xForTs(t.ts), yFor(t.price)]);
+          if (pts.length === 1) {
+            ctx.beginPath(); ctx.arc(pts[0][0], pts[0][1], 3, 0, Math.PI * 2); ctx.fillStyle = "#22c55e"; ctx.fill();
+          } else {
+            ctx.beginPath();
+            ctx.moveTo(pts[0][0], PAD.t + plotH);
+            for (const p of pts) ctx.lineTo(p[0], p[1]);
+            ctx.lineTo(pts[pts.length - 1][0], PAD.t + plotH);
+            ctx.closePath();
+            const grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t + plotH);
+            grad.addColorStop(0, "rgba(34,197,94,0.28)"); grad.addColorStop(1, "rgba(34,197,94,0)");
+            ctx.fillStyle = grad; ctx.fill();
+            ctx.beginPath();
+            for (let i = 0; i < pts.length; i++) { if (i) ctx.lineTo(pts[i][0], pts[i][1]); else ctx.moveTo(pts[i][0], pts[i][1]); }
+            ctx.strokeStyle = "#22c55e"; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.stroke();
+            const last = pts[pts.length - 1];
+            ctx.beginPath(); ctx.arc(last[0], last[1], 3, 0, Math.PI * 2); ctx.fillStyle = "#22c55e"; ctx.fill();
+          }
+        }
+
+        // ligne pointillee du dernier prix
+        const lastPrice = useCandles ? vis[vis.length - 1].close : vis[vis.length - 1].price;
+        const yLast = yFor(lastPrice);
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = "rgba(230,233,239,0.30)";
+        ctx.beginPath(); ctx.moveTo(PAD.l, yLast); ctx.lineTo(PAD.l + plotW, yLast); ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Direction de la bougie en cours, en bas (BUY / SELL)
+        if (useCandles && vis.length) {
+          const lc = vis[vis.length - 1];
+          const up = lc.close >= lc.open;
+          const txt = up ? "BUY" : "SELL";
+          ctx.font = "bold 15px -apple-system, sans-serif";
+          const dw = ctx.measureText(txt).width + 22;
+          const bx = PAD.l + plotW / 2;
+          const by = PAD.t + plotH - 16;
+          ctx.fillStyle = up ? "rgba(34,197,94,0.92)" : "rgba(239,68,68,0.92)";
+          ctx.fillRect(bx - dw / 2, by - 12, dw, 24);
+          ctx.fillStyle = up ? "#04140a" : "#ffffff";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(txt, bx, by);
+          ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+        }
+
+        // axe du temps (sur la fenetre visible)
+        ctx.fillStyle = "#6b7688"; ctx.textBaseline = "top";
+        for (let i = 0; i <= 4; i++) {
+          const ts = t0 + (t1 - t0) * (i / 4);
+          const x = PAD.l + (i / 4) * plotW;
+          const label = axisLabel(ts, t1 - t0);
+          const tw = ctx.measureText(label).width;
+          ctx.fillText(label, Math.max(PAD.l, Math.min(x - tw / 2, PAD.l + plotW - tw)), PAD.t + plotH + 8);
+        }
+      }
+
+      // ---- zoom / pan -------------------------------------------------
+      function currentViewForZoom() {
+        const s = currentSeries();
+        const full = fullView(s.data);
+        if (!full) return null;
+        const view = state.view
+          ? { t0: state.view.t0, t1: state.view.t1 }
+          : defaultWindow(s.data, s.useCandles);
+        return { view: view, full: full, data: s.data };
+      }
+
+      function zoomAt(clientX, factor) {
+        const ctxz = currentViewForZoom();
+        if (!ctxz) return;
+        const rect = canvas.getBoundingClientRect();
+        const plotW = plotWidth();
+        const frac = Math.max(0, Math.min(1, (clientX - rect.left - PAD.l) / plotW));
+        const span = ctxz.view.t1 - ctxz.view.t0;
+        const cursorT = ctxz.view.t0 + frac * span;
+
+        const dataSpan = Math.max(ctxz.full.t1 - ctxz.full.t0, Math.max(1, state.tf) * 4);
+        const minSpan = Math.max(2 * state.tf, 4);
+        const maxSpan = Math.max(dataSpan * 1.5, 3600);
+        const newSpan = Math.min(maxSpan, Math.max(minSpan, span * factor));
+
+        let n0 = cursorT - (cursorT - ctxz.view.t0) * (newSpan / span);
+        let n1 = n0 + newSpan;
+        state.view = { t0: n0, t1: n1 };
+        state.follow = n1 >= ctxz.full.t1 - newSpan * 0.03;
+        draw();
+      }
+
+      function zoomCenter(factor) {
+        const rect = canvas.getBoundingClientRect();
+        zoomAt(rect.left + PAD.l + plotWidth() / 2, factor);
+      }
+
+      function resetView() {
+        state.view = null; state.follow = false; draw();
+      }
+
+      let drag = null;
+      canvas.addEventListener("pointerdown", function (e) {
+        const z = currentViewForZoom();
+        if (!z) return;
+        drag = { x: e.clientX, view: { t0: z.view.t0, t1: z.view.t1 } };
+        canvas.classList.add("grabbing");
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+      });
+      canvas.addEventListener("pointermove", function (e) {
+        if (!drag) return;
+        const span = drag.view.t1 - drag.view.t0;
+        const dx = e.clientX - drag.x;
+        const dt = -(dx / Math.max(1, plotWidth())) * span;
+        state.view = { t0: drag.view.t0 + dt, t1: drag.view.t1 + dt };
+        state.follow = false;
+        draw();
+      });
+      function endDrag() { drag = null; canvas.classList.remove("grabbing"); }
+      canvas.addEventListener("pointerup", endDrag);
+      canvas.addEventListener("pointercancel", endDrag);
+      canvas.addEventListener("wheel", function (e) {
+        e.preventDefault();
+        const factor = e.deltaY > 0 ? 1.18 : 0.85;
+        zoomAt(e.clientX, factor);
+      }, { passive: false });
+      canvas.addEventListener("dblclick", resetView);
+
+      document.getElementById("zoom-in").addEventListener("click", function () { zoomCenter(0.8); });
+      document.getElementById("zoom-out").addEventListener("click", function () { zoomCenter(1.25); });
+      document.getElementById("zoom-reset").addEventListener("click", resetView);
+
+      // ---- selection de zone + analyse IA ----------------------------
+      const overlay = document.getElementById("sel-overlay");
+      const selRectEl = document.getElementById("sel-rect");
+      let selStart = null;
+
+      function setSelectMode(on) {
+        overlay.style.display = on ? "block" : "none";
+        selRectEl.style.display = "none";
+        document.getElementById("select-zone").textContent = on ? "Annuler la sélection" : "Sélectionner la zone à capturer";
+        if (!on) selStart = null;
+      }
+
+      overlay.addEventListener("pointerdown", function (e) {
+        const r = wrap.getBoundingClientRect();
+        selStart = { x: e.clientX - r.left, y: e.clientY - r.top };
+        selRectEl.style.display = "block";
+        selRectEl.style.left = selStart.x + "px";
+        selRectEl.style.top = selStart.y + "px";
+        selRectEl.style.width = "0px";
+        selRectEl.style.height = "0px";
+        try { overlay.setPointerCapture(e.pointerId); } catch (err) {}
+      });
+      overlay.addEventListener("pointermove", function (e) {
+        if (!selStart) return;
+        const r = wrap.getBoundingClientRect();
+        const x = e.clientX - r.left, y = e.clientY - r.top;
+        selRectEl.style.left = Math.min(selStart.x, x) + "px";
+        selRectEl.style.top = Math.min(selStart.y, y) + "px";
+        selRectEl.style.width = Math.abs(x - selStart.x) + "px";
+        selRectEl.style.height = Math.abs(y - selStart.y) + "px";
+      });
+      overlay.addEventListener("pointerup", function () {
+        if (!selStart) return;
+        const x = parseFloat(selRectEl.style.left) || 0;
+        const y = parseFloat(selRectEl.style.top) || 0;
+        const w = parseFloat(selRectEl.style.width) || 0;
+        const h = parseFloat(selRectEl.style.height) || 0;
+        selStart = null;
+        setSelectMode(false);
+        if (w < 12 || h < 12) return;
+        state.selRegion = { x: x, y: y, w: w, h: h };
+        const img = captureRegion(state.selRegion);
+        const prev = document.getElementById("sel-preview");
+        prev.src = img; prev.style.display = "block";
+        document.getElementById("sel-info").textContent = Math.round(w) + "×" + Math.round(h) + " px capturés";
+      });
+
+      function captureRegion(region) {
+        const dpr = (canvas.width || 1) / Math.max(1, wrap.clientWidth);
+        let sx = Math.max(0, Math.round(region.x * dpr));
+        let sy = Math.max(0, Math.round(region.y * dpr));
+        let sw = Math.max(1, Math.round(region.w * dpr));
+        let sh = Math.max(1, Math.round(region.h * dpr));
+        if (sx + sw > canvas.width) sw = canvas.width - sx;
+        if (sy + sh > canvas.height) sh = canvas.height - sy;
+        const off = document.createElement("canvas");
+        off.width = Math.max(1, sw); off.height = Math.max(1, sh);
+        off.getContext("2d").drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        return off.toDataURL("image/png");
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+        });
+      }
+
+      function renderDecision(data) {
+        const d = data.decision || {};
+        const dir = (d.direction || "NONE").toUpperCase();
+        const conf = typeof d.confidence === "number" ? d.confidence : 0;
+        let html = "";
+        html += "<div><b>" + escapeHtml(d.pattern_name || "schéma") + "</b> — trouvé : " + (d.pattern_found ? "oui" : "non") + "</div>";
+        html += '<div>Direction : <span class="dir-' + dir + '">' + dir + "</span> · confiance " + conf.toFixed(2) + "</div>";
+        if (d.explanation) html += '<div style="color:#b6bfd0;margin-top:4px;">' + escapeHtml(d.explanation) + "</div>";
+        if (data.action === "order_submitted") html += '<div style="color:#22c55e;margin-top:4px;">Ordre soumis (#' + data.order_id + ")</div>";
+        if (data.model) html += '<div class="sub" style="margin-top:4px;">modèle: ' + escapeHtml(data.model) + "</div>";
+        document.getElementById("ai-result").innerHTML = html;
+      }
+
+      function buildZoneContext(region) {
+        try {
+          const m = state.lastMapping;
+          if (!m || !region) return "";
+          const f0 = Math.max(0, Math.min(1, (region.x - m.left) / m.width));
+          const f1 = Math.max(0, Math.min(1, (region.x + region.w - m.left) / m.width));
+          const ta = m.t0 + f0 * (m.t1 - m.t0);
+          const tb = m.t0 + f1 * (m.t1 - m.t0);
+          const s = currentSeries();
+          const sel = s.data.filter(function (d) { return d.ts >= ta && d.ts <= tb; }).slice(-120);
+          if (!sel.length) return "";
+          const lines = ["type=" + (s.useCandles ? "candles" : "ticks") + " intervalle=" + (s.useCandles ? state.tf : 0) + "s"];
+          lines.push("ts,open,high,low,close");
+          for (const c of sel) {
+            if (s.useCandles) lines.push([Math.round(c.ts), c.open, c.high, c.low, c.close].join(","));
+            else lines.push([Math.round(c.ts), "", "", "", c.price].join(","));
+          }
+          return lines.join("\n");
+        } catch (e) { return ""; }
+      }
+
+      async function runAnalysis() {
+        if (!state.selRegion) {
+          document.getElementById("ai-result").textContent = "Sélectionne d'abord une zone du graphique.";
+          return;
+        }
+        if (state.analyzing) return;
+        state.analyzing = true;
+        const image = captureRegion(state.selRegion);
+        const body = {
+          image: image,
+          prompt: document.getElementById("ai-prompt").value || "Repère un schéma de retournement ou de continuation exploitable.",
+          asset: state.asset,
+          context: buildZoneContext(state.selRegion),
+          auto_trade: document.getElementById("ai-trade").checked,
+          min_confidence: parseFloat(document.getElementById("ai-conf").value) || 0.7,
+        };
+        const box = document.getElementById("ai-result");
+        box.textContent = "Analyse IA en cours…";
+        try {
+          const res = await fetch("/api/analyze", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            box.innerHTML = '<span style="color:#ffb4b4">' + escapeHtml(data.detail || "Erreur IA") + "</span>";
+            return;
+          }
+          renderDecision(data);
+        } catch (err) {
+          box.innerHTML = '<span style="color:#ffb4b4">' + escapeHtml(err.message) + "</span>";
+        } finally {
+          state.analyzing = false;
+        }
+      }
+
+      async function loadAIConfig() {
+        try {
+          const res = await fetch("/api/ai/config");
+          const cfg = await res.json();
+          document.getElementById("ai-base").value = cfg.base_url || "";
+          document.getElementById("ai-model").value = cfg.model || "";
+          document.getElementById("ai-key").placeholder = cfg.has_key ? "clé enregistrée (vide = garder)" : "clé API";
+        } catch (e) { /* ignore */ }
+      }
+
+      async function saveAIConfig() {
+        const body = {
+          base_url: document.getElementById("ai-base").value || undefined,
+          model: document.getElementById("ai-model").value || undefined,
+          api_key: document.getElementById("ai-key").value || undefined,
+        };
+        await fetch("/api/ai/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        document.getElementById("ai-key").value = "";
+        await loadAIConfig();
+        document.getElementById("ai-result").textContent = "Config IA enregistrée.";
+      }
+
+      document.getElementById("select-zone").addEventListener("click", function () {
+        setSelectMode(overlay.style.display !== "block");
+      });
+      document.getElementById("ai-analyze").addEventListener("click", runAnalysis);
+      document.getElementById("ai-save").addEventListener("click", saveAIConfig);
+      document.getElementById("ai-watch").addEventListener("change", function (e) {
+        if (state.watchTimer) { clearInterval(state.watchTimer); state.watchTimer = null; }
+        const sec = parseInt(e.target.value, 10) || 0;
+        if (sec > 0) state.watchTimer = setInterval(runAnalysis, sec * 1000);
+      });
+
+      // ---- replay / backtest -----------------------------------------
+      const replayModal = document.getElementById("replay-modal");
+      let replayPoll = null;
+
+      function openReplay() {
+        replayModal.classList.add("open");
+        const rp = document.getElementById("rp-prompt");
+        if (!rp.value) rp.value = document.getElementById("ai-prompt").value || "";
+        loadStrategies();
+      }
+      function closeReplay() { replayModal.classList.remove("open"); }
+
+      function renderReplay(r) {
+        const m = r.metrics || {};
+        let html = "";
+        html += '<div style="margin-top:10px;font-weight:600;">' +
+          (r.good ? '<span class="win">Bonne méthode</span>' : '<span class="loss">Méthode non validée</span>') + "</div>";
+        const rows = [
+          ["Trades", m.trades || 0], ["Gagnants", m.wins || 0], ["Perdants", m.losses || 0],
+          ["Win rate", (m.win_rate || 0) + " %"], ["PnL total", (m.total_pnl_pct || 0) + " %"],
+          ["PnL moyen", (m.avg_pnl_pct || 0) + " %"], ["Profit factor", m.profit_factor || 0],
+        ];
+        html += '<div style="margin-top:6px;">' + rows.map(function (x) {
+          return '<div class="metric"><span>' + x[0] + "</span><b>" + x[1] + "</b></div>";
+        }).join("") + "</div>";
+        if (r.saved_strategy_id) html += '<div class="win" style="margin-top:6px;">Méthode enregistrée #' + r.saved_strategy_id + "</div>";
+        const errs = (r.decisions || []).filter(function (d) { return d.error; }).length;
+        if (errs) html += '<div class="sub" style="margin-top:4px;">' + errs + " étape(s) IA en erreur</div>";
+        if (r.trades && r.trades.length) {
+          html += '<table class="tbl"><tr><th>#</th><th>Heure</th><th>Dir</th><th>Entrée</th><th>Sortie</th><th>PnL %</th></tr>';
+          for (const t of r.trades) {
+            const cls = t.win ? "win" : "loss";
+            html += '<tr><td>' + t.index + "</td><td>" + shortTime(t.ts) + '</td><td class="' + cls + '">' +
+              t.direction + "</td><td>" + t.entry + "</td><td>" + t.exit + '</td><td class="' + cls + '">' + t.pnl_pct + "</td></tr>";
+          }
+          html += "</table>";
+        } else {
+          html += '<div class="sub" style="margin-top:6px;">Aucun trade simulé (aucun signal au-dessus du seuil).</div>';
+        }
+        document.getElementById("rp-results").innerHTML = html;
+      }
+
+      async function loadStrategies() {
+        const box = document.getElementById("rp-list");
+        try {
+          const res = await fetch("/api/strategies");
+          const data = await res.json();
+          const list = data.strategies || [];
+          if (!list.length) { box.innerHTML = '<div class="sub">Aucune méthode enregistrée.</div>'; return; }
+          box.innerHTML = list.map(function (s) {
+            const m = s.metrics || {};
+            return '<div class="strat"><div><b>' + escapeHtml(s.name || "Méthode") + '</b><br><span class="sub">' +
+              escapeHtml(s.asset || "") + " · WR " + (m.win_rate || 0) + " % · PnL " + (m.total_pnl_pct || 0) +
+              " % · " + (m.trades || 0) + ' trades</span></div><div style="display:flex;gap:6px;">' +
+              '<button data-id="' + s.id + '">Utiliser</button>' +
+              '<button data-live="' + s.id + '">Live</button></div></div>';
+          }).join("");
+          box.querySelectorAll("button[data-id]").forEach(function (btn) {
+            btn.onclick = function () {
+              const s = list.find(function (x) { return String(x.id) === btn.getAttribute("data-id"); });
+              if (s) {
+                document.getElementById("ai-prompt").value = s.prompt || "";
+                document.getElementById("rp-prompt").value = s.prompt || "";
+                closeReplay();
+              }
+            };
+          });
+          box.querySelectorAll("button[data-live]").forEach(function (btn) {
+            btn.onclick = function () {
+              const id = parseInt(btn.getAttribute("data-live"), 10);
+              if (!id) return;
+              closeReplay();
+              startLive({
+                strategy_id: id,
+                asset: state.asset,
+                window: 40,
+                min_confidence: parseFloat(document.getElementById("ai-conf").value) || 0.55,
+                auto_trade: document.getElementById("ai-trade").checked,
+                interval: 10,
+              });
+            };
+          });
+        } catch (e) {
+          box.innerHTML = '<div class="sub">Erreur de chargement.</div>';
+        }
+      }
+
+      document.getElementById("replay-open").addEventListener("click", openReplay);
+      document.getElementById("replay-close").addEventListener("click", closeReplay);
+
+      document.getElementById("rp-generate").addEventListener("click", async function () {
+        const progress = document.getElementById("rp-progress");
+        progress.textContent = "L'IA analyse le marché et propose une méthode…";
+        document.getElementById("rp-results").innerHTML = "";
+        try {
+          const res = await fetch("/api/suggest-method", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              asset: state.asset,
+              timeframe: parseInt(document.getElementById("rp-tf").value, 10) || 30,
+              lookback: parseInt(document.getElementById("rp-lookback").value, 10) || 200,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) { progress.textContent = "Erreur: " + (data.detail || "inconnue"); return; }
+          const m = data.method || {};
+          document.getElementById("rp-prompt").value = m.prompt || "";
+          progress.textContent = "Méthode proposée : " + (m.name || "") +
+            (m.rationale ? " — " + m.rationale : "");
+          if (document.getElementById("rp-autorun").checked) {
+            document.getElementById("rp-run").click();
+          }
+        } catch (e) {
+          progress.textContent = "Erreur: " + e.message;
+        }
+      });
+
+      document.getElementById("rp-run").addEventListener("click", async function () {
+        const prompt = document.getElementById("rp-prompt").value.trim();
+        const progress = document.getElementById("rp-progress");
+        if (!prompt) { progress.textContent = "Décris d'abord la méthode à tester."; return; }
+        const body = {
+          prompt: prompt,
+          asset: state.asset,
+          timeframe: parseInt(document.getElementById("rp-tf").value, 10) || 30,
+          lookback: parseInt(document.getElementById("rp-lookback").value, 10) || 200,
+          window: parseInt(document.getElementById("rp-window").value, 10) || 40,
+          step: parseInt(document.getElementById("rp-step").value, 10) || 8,
+          max_steps: parseInt(document.getElementById("rp-steps").value, 10) || 8,
+          horizon: parseInt(document.getElementById("rp-horizon").value, 10) || 10,
+          min_confidence: parseFloat(document.getElementById("rp-conf").value) || 0.55,
+          save_if_good: true,
+        };
+        document.getElementById("rp-results").innerHTML = "";
+        progress.textContent = "Démarrage du replay…";
+        try {
+          const res = await fetch("/api/replay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+          const info = await res.json();
+          if (!res.ok) { progress.textContent = "Erreur: " + (info.detail || "inconnue"); return; }
+          const jobId = info.job_id;
+          if (replayPoll) clearInterval(replayPoll);
+          replayPoll = setInterval(async function () {
+            try {
+              const r = await fetch("/api/replay/" + jobId);
+              const job = await r.json();
+              if (job.status === "running") {
+                progress.textContent = "Replay en cours… " + (job.progress || 0) + "/" + (job.total || "?") + " étapes";
+                return;
+              }
+              clearInterval(replayPoll); replayPoll = null;
+              if (job.status === "error") { progress.textContent = "Erreur: " + job.error; return; }
+              progress.textContent = "Replay terminé.";
+              renderReplay(job.result || {});
+              loadStrategies();
+            } catch (e) {
+              clearInterval(replayPoll); replayPoll = null;
+              progress.textContent = "Erreur de suivi: " + e.message;
+            }
+          }, 3000);
+        } catch (e) {
+          progress.textContent = "Erreur: " + e.message;
+        }
+      });
+
+      // ---- sequence live ---------------------------------------------
+      let livePoll = null;
+
+      function renderLive(st) {
+        const el = document.getElementById("live-status");
+        if (!st || !st.running) { el.textContent = "Arrêtée"; return; }
+        let txt = "Live: " + (st.strategy || "") + " · " + (st.asset || "");
+        if (st.last_decision) {
+          txt += " · avis " + (st.last_decision.direction || "?") + " (" + (st.last_decision.confidence || 0) + ")";
+        }
+        if (st.last_signal) {
+          txt += " · signal " + st.last_signal.direction + " @" + st.last_signal.price;
+        }
+        txt += " · signaux " + (st.orders || 0);
+        if (st.last_error) txt += " · ⚠ " + st.last_error;
+        el.textContent = txt;
+      }
+
+      async function pollLive() {
+        try {
+          const res = await fetch("/api/live");
+          renderLive(await res.json());
+        } catch (e) { /* ignore */ }
+      }
+
+      async function startLive(payload) {
+        const el = document.getElementById("live-status");
+        el.textContent = "Démarrage…";
+        try {
+          const res = await fetch("/api/live/start", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) { el.textContent = "Erreur: " + (data.detail || "inconnue"); return; }
+          if (!livePoll) livePoll = setInterval(pollLive, 3000);
+          pollLive();
+        } catch (e) { el.textContent = "Erreur: " + e.message; }
+      }
+
+      document.getElementById("live-start").addEventListener("click", function () {
+        const prompt = document.getElementById("ai-prompt").value.trim();
+        if (!prompt) {
+          document.getElementById("live-status").textContent = "Sélectionne d'abord une méthode (bouton Utiliser).";
+          return;
+        }
+        startLive({
+          prompt: prompt,
+          asset: state.asset,
+          timeframe: parseInt(document.getElementById("live-tf").value, 10) || 30,
+          window: 40,
+          min_confidence: parseFloat(document.getElementById("ai-conf").value) || 0.55,
+          auto_trade: document.getElementById("ai-trade").checked,
+          interval: 10,
+        });
+      });
+
+      document.getElementById("live-stop").addEventListener("click", async function () {
+        try { await fetch("/api/live/stop", { method: "POST" }); } catch (e) { /* ignore */ }
+        document.getElementById("live-status").textContent = "Arrêtée";
+        if (livePoll) { clearInterval(livePoll); livePoll = null; }
+      });
+
+      document.getElementById("signals-clear").addEventListener("click", async function () {
+        try {
+          await fetch("/api/signals?asset=" + encodeURIComponent(state.asset), { method: "DELETE" });
+          document.getElementById("signals").innerHTML = '<div class="empty">Aucun signal</div>';
+        } catch (e) { /* ignore */ }
+      });
+
+      // ---- bot formations de bougies --------------------------------
+      let patPoll = null;
+
+      function renderPattern(st) {
+        const el = document.getElementById("pat-status");
+        if (!st || !st.running) { el.textContent = "Arrêté"; return; }
+        let txt = "Actif " + (st.asset || "") + " · " + (st.source || "ticks");
+        if (st.last_decision) {
+          txt += " · " + st.last_decision.direction + " " + st.last_decision.pattern +
+            " (" + st.last_decision.strength + ")";
+        }
+        txt += " · signaux " + (st.events || 0) + " · trades " + (st.trades || 0);
+        if (st.last_error) txt += " · ⚠ " + st.last_error;
+        el.textContent = txt;
+      }
+
+      async function pollPattern() {
+        try {
+          const res = await fetch("/api/pattern");
+          renderPattern(await res.json());
+        } catch (e) { /* ignore */ }
+      }
+
+      document.getElementById("pat-start").addEventListener("click", async function () {
+        const el = document.getElementById("pat-status");
+        el.textContent = "Démarrage…";
+        const interval = parseInt(document.getElementById("pat-interval").value, 10) || 60;
+        const payload = {
+          asset: state.asset,
+          source: document.getElementById("pat-source").value,
+          interval: interval,
+          timeframe: interval,
+          amount: parseFloat(document.getElementById("pat-amount").value) || 1,
+          min_strength: parseFloat(document.getElementById("pat-strength").value) || 0.5,
+          auto_trade: document.getElementById("pat-trade").checked,
+          require_trend: document.getElementById("pat-trend").checked,
+          poll: Math.min(10, Math.max(3, Math.floor(interval / 4))),
+          cooldown: interval,
+        };
+        try {
+          const res = await fetch("/api/pattern/start", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) { el.textContent = "Erreur: " + (data.detail || "inconnue"); return; }
+          if (!patPoll) patPoll = setInterval(pollPattern, 3000);
+          pollPattern();
+        } catch (e) { el.textContent = "Erreur: " + e.message; }
+      });
+
+      document.getElementById("pat-stop").addEventListener("click", async function () {
+        try { await fetch("/api/pattern/stop", { method: "POST" }); } catch (e) { /* ignore */ }
+        document.getElementById("pat-status").textContent = "Arrêté";
+        if (patPoll) { clearInterval(patPoll); patPoll = null; }
+      });
+
+      // ---- positions achat / vente --------------------------------
+      function updateOrderAsset() {
+        const el = document.getElementById("order-asset");
+        if (el) el.textContent = state.asset;
+      }
+
+      async function pollPositions() {
+        try {
+          const res = await fetch("/api/positions?limit=20");
+          const data = await res.json();
+          const trades = data.trades || [];
+          const open = trades.filter(function (t) { return t.outcome === "PENDING"; });
+          const closed = trades.filter(function (t) { return t.outcome === "WIN" || t.outcome === "LOSS"; });
+
+          const openBox = document.getElementById("open-positions");
+          if (openBox) {
+            // Dedupe visuelle : une seule ligne par paire+sens.
+            const _seen = new Set();
+            const openDedup = open.filter(function (t) {
+              const k = (t.asset || "") + "|" + (t.direction || "");
+              if (_seen.has(k)) return false;
+              _seen.add(k);
+              return true;
+            });
+            open.length = 0;
+            Array.prototype.push.apply(open, openDedup);
+            if (!open.length) {
+              openBox.innerHTML = '<div class="empty">Aucune position en cours</div>';
+            } else {
+              const now = Date.now() / 1000;
+              openBox.innerHTML = open.map(function (t) {
+                const remain = Math.max(0, Math.round(t.expiry - now));
+                const col = t.live === "WIN" ? "#22c55e" : (t.live === "LOSS" ? "#ef4444" : "#f59e0b");
+                const tag = t.live === "WIN" ? "GAGNANT" : (t.live === "LOSS" ? "PERDANT" : "en cours");
+                const prices = (t.entry != null ? t.entry : "—") + (t.current_price != null ? " → " + t.current_price : "");
+                return '<div class="signal" style="border:2px solid ' + col + ';border-radius:10px;padding:6px 8px">' +
+                  '<b style="color:' + col + '">' + t.direction + " " + t.amount + " " + t.asset + " — " + tag + "</b>" +
+                  " · " + remain + "s" +
+                  (prices ? "<br><small>" + prices + "</small>" : "") + "</div>";
+              }).join("");
+            }
+          }
+
+          const sum = document.getElementById("results-summary");
+          if (sum) {
+            const w = data.wins || 0, l = data.losses || 0;
+            const done = w + l;
+            const rate = done ? Math.round((100 * w) / done) : 0;
+            const total = (typeof data.total_gain === "number") ? data.total_gain : 0;
+            const tColor = total >= 0 ? "#22c55e" : "#ef4444";
+            const tSign = total >= 0 ? "+" : "";
+            sum.innerHTML = "Résultats — <b style=\"color:#22c55e\">" + w +
+              " gagnés</b> · <b style=\"color:#ef4444\">" + l + " perdus</b>" +
+              (done ? " · taux " + rate + "%" : "") +
+              " · <b style=\"color:" + tColor + "\">total " + tSign + total.toFixed(2) + " USD</b>" +
+              (open.length ? " · " + open.length + " en cours" : "");
+          }
+
+          const dbox = document.getElementById("results-daily");
+          if (dbox) {
+            const days = data.daily || [];
+            if (!days.length) {
+              dbox.innerHTML = '<div class="empty">Aucune journée</div>';
+            } else {
+              const rs = days.map(function (d) {
+                const rateCls = d.rate >= 55 ? "win" : "loss";
+                const netCls = d.net >= 0 ? "win" : "loss";
+                return "<tr><td>" + d.day + "</td><td>" + d.trades + "</td>" +
+                  '<td class="win">' + d.wins + '</td><td class="loss">' + d.losses + "</td>" +
+                  '<td class="' + rateCls + '">' + d.rate + "%</td>" +
+                  '<td class="' + netCls + '">' + (d.net >= 0 ? "+" : "") + d.net.toFixed(2) + "</td></tr>";
+              }).join("");
+              dbox.innerHTML = '<table class="tbl"><thead><tr><th>Jour</th><th>Trades</th>' +
+                "<th>Gagnés</th><th>Perdus</th><th>Taux</th><th>Net</th></tr></thead><tbody>" +
+                rs + "</tbody></table>";
+            }
+          }
+          const box = document.getElementById("results-list");
+          if (!box) return;
+          if (!closed.length) { box.innerHTML = '<div class="empty">Aucun résultat</div>'; return; }
+          const rows = closed.map(function (t) {
+            const cls = t.outcome === "WIN" ? "win" : "loss";
+            const tag = t.outcome === "WIN" ? "GAGNÉ" : "PERDU";
+            const prices = (t.entry != null ? t.entry : "—") + (t.exit_price != null ? " → " + t.exit_price : "");
+            const gain = (typeof t.gain === "number") ? t.gain : null;
+            const gainTxt = (gain == null) ? "—" : ((gain >= 0 ? "+" : "") + gain.toFixed(2));
+            const gainCls = (gain == null) ? "" : (gain >= 0 ? "win" : "loss");
+            return "<tr><td>" + shortTime(t.ts) + "</td>" +
+              '<td style="white-space:nowrap">' + (t.asset || "—") + "</td>" +
+              '<td style="white-space:nowrap">' + (t.patterns || "—") + "</td>" +
+              '<td class="dir-' + t.direction + '">' + t.direction + "</td>" +
+              "<td>" + t.amount + "</td>" +
+              '<td style="white-space:nowrap">' + prices + "</td>" +
+              '<td class="' + cls + '">' + tag + "</td>" +
+              '<td class="' + gainCls + '" style="white-space:nowrap">' + gainTxt + "</td></tr>";
+          }).join("");
+          box.innerHTML = '<table class="tbl"><thead><tr><th>Heure</th><th>Paire</th><th>Méthode</th><th>Sens</th>' +
+            "<th>Mise</th><th>Entrée → Sortie</th><th>Résultat</th><th>Gain</th></tr></thead><tbody>" +
+            rows + "</tbody></table>";
+        } catch (e) { /* ignore */ }
+      }
+
+      async function pollLearnings() {
+        try {
+          const res = await Promise.all([
+            fetch("/api/trader-profile"),
+            fetch("/api/learnings?limit=8"),
+            fetch("/api/learn/auto"),
+            fetch("/api/settings/amount"),
+            fetch("/api/observations?limit=12"),
+            fetch("/api/methods"),
+          ]);
+          const p = await res[0].json();
+          const l = await res[1].json();
+          const a = await res[2].json();
+          const amt = await res[3].json();
+          const obs = await res[4].json();
+          const mth = await res[5].json();
+          const st = document.getElementById("bot-stake");
+          if (st) {
+            const hb = (typeof a.heartbeat_age === "number") ? a.heartbeat_age : null;
+            const live = hb !== null && hb < 30;
+            const on = !!a.enabled;
+            st.style.color = (on && live) ? "#22c55e" : "#f5a524";
+            let txt = "Bot " + (on ? "ACTIF" : "désactivé");
+            if (hb !== null) {
+              txt += " · collector " + (live ? "en ligne" : "hors ligne (" + Math.round(hb) + "s)");
+            }
+            txt += " · mise " + (amt.amount || 1) + "$";
+            if (a.monitored && a.monitored.length) {
+              txt += " · " + a.monitored.length + " paires surveillées";
+            }
+            if (a.last_signal) {
+              txt += " · dernier signal : " + a.last_signal;
+            }
+            if (typeof a.auto_trades === "number") {
+              txt += " · " + a.auto_trades + " trades auto";
+            }
+            if (typeof a.learn_trades === "number" && typeof a.learn_age === "number") {
+              txt += " · apprentissage " + a.learn_trades + " trades (maj il y a " + Math.round(a.learn_age) + "s)";
+            }
+            st.textContent = txt;
+          }
+          const sc = document.getElementById("bot-scan");
+          if (sc) {
+            const scan = a.scan || [];
+            const total = scan.length;
+            const withBars = scan.filter(function (x) { return (x.bars || 0) >= 3; }).length;
+            const sigs = scan.filter(function (x) { return x.matched && x.matched.length; })
+              .map(function (x) { return x.asset + " (" + x.matched.join(",") + ")"; });
+            const ageS = (typeof a.scan_age === "number") ? ("il y a " + Math.round(a.scan_age) + "s") : "";
+            let t = "Scan " + ageS + " : " + withBars + "/" + total + " paires avec bougies";
+            t += sigs.length
+              ? (" · signaux : " + sigs.join(" ; "))
+              : " · aucune figure positive actuellement";
+            sc.textContent = t;
+          }
+          const bp = document.getElementById("bot-pairs");
+          if (bp) {
+            const mon = a.monitored || [];
+            bp.textContent = mon.length
+              ? ("Paires surveillées : " + mon.join(", "))
+              : "Paires surveillées : aucune";
+          }
+          const sigEl = document.getElementById("trade-signal");
+          if (sigEl) {
+            const s = a.signal, age = a.signal_age;
+            if (s && typeof age === "number" && age <= 30) {
+              const up = s.indexOf("BUY") === 0;
+              sigEl.style.display = "block";
+              sigEl.style.background = up ? "rgba(34,197,94,.16)" : "rgba(239,68,68,.16)";
+              sigEl.style.color = up ? "#22c55e" : "#ef4444";
+              sigEl.textContent = "SIGNAL — " + s + " · il y a " + Math.round(age) + "s";
+              if (s !== window.__lastSig) {
+                window.__lastSig = s;
+                playBeep(up);
+              }
+            } else {
+              sigEl.style.display = "none";
+            }
+          }
+          const rb = document.getElementById("reject-banner");
+          const rt = document.getElementById("reject-text");
+          if (rb && rt) {
+            const eMsg = a.error, eAge = a.error_age;
+            if (eMsg && typeof eAge === "number" && eAge <= 60) {
+              rt.textContent = "Info IQ : " + eMsg;
+              rb.classList.add("show");
+            } else {
+              rb.classList.remove("show");
+            }
+          }
+          const sum = document.getElementById("learn-summary");
+          if (sum) {
+            const col = (p.profit >= 0) ? "#22c55e" : "#ef4444";
+            sum.innerHTML = "Gagnants : <b style=\"color:#22c55e\">" + (p.wins || 0) +
+              "</b> · Perdants : <b style=\"color:#ef4444\">" + (p.losses || 0) +
+              "</b>" + (p.closed ? " · taux <b>" + p.rate + "%</b>" : "") +
+              " · net <b style=\"color:" + col + "\">" + (p.profit >= 0 ? "+" : "") + (p.profit || 0) + "$</b>";
+          }
+          const ll = document.getElementById("learn-live");
+          if (ll) {
+            if (typeof a.learn_trades === "number") {
+              ll.textContent = (a.enabled ? "Apprentissage en direct" : "Apprentissage (bot arrêté)") +
+                " : " + a.learn_trades + " trades" +
+                (typeof a.learn_age === "number" ? " · mis à jour il y a " + Math.round(a.learn_age) + " s" : "");
+            } else {
+              ll.textContent = "";
+            }
+          }
+          const prof = document.getElementById("learn-profile");
+          if (prof) {
+            const parts = [];
+            if (p.assets && p.assets.length) parts.push("Paires: " + p.assets.join(", "));
+            if (p.direction) parts.push("Achats " + p.direction.buy + " / Ventes " + p.direction.sell);
+            if (p.avg_amount) parts.push("Mise moy. " + p.avg_amount + "$");
+            if (p.expirations && p.expirations.length) parts.push("Échéance " + p.expirations.join("/") + "s");
+            if (p.patterns && p.patterns.length) parts.push("Figures: " + p.patterns.join(", "));
+            if (p.hours && p.hours.length) parts.push("Heures: " + p.hours.map(function (h) { return h + "h"; }).join(", "));
+            if (p.entry_before_close != null) parts.push("Entrée ~" + p.entry_before_close + "s avant clôture (" + (p.timing_count || 0) + " trades)");
+            prof.textContent = parts.join(" · ");
+          }
+          const btn = document.getElementById("learn-auto");
+          if (btn) btn.textContent = "Bot : suivre mon style (" + (a.enabled ? "ON" : "OFF") + ")";
+          const stratEl = document.getElementById("learn-strategy");
+          if (stratEl) {
+            const s = a.strategy;
+            if (s) {
+              const excl = (s.excluded || []).join(", ");
+              stratEl.textContent = "Méthodes positives : " + (s.allowed || []).join(", ") +
+                " · sur toutes les paires tradables · " + s.amount + "$ · " + s.expiry + "s" +
+                (excl ? " · exclues : " + excl : "");
+            } else {
+              stratEl.textContent = "Aucune méthode à ROI positif (min. 3 trades).";
+            }
+          }
+          const box = document.getElementById("learnings-list");
+          if (box) {
+            if (!l.learnings || !l.learnings.length) {
+              box.innerHTML = '<div class="empty">Le bot observe…</div>';
+            } else {
+              box.innerHTML = l.learnings.map(function (x) {
+                return '<div class="signal" style="display:flex;justify-content:space-between;gap:6px;align-items:center">' +
+                  "<span><small>" + shortTime(x.ts) + "</small> " + x.text + "</span>" +
+                  '<button class="learn-del" data-id="' + x.id + '" style="flex:0 0 auto;min-width:40px;min-height:38px;padding:8px 12px;font-size:16px">✕</button></div>';
+              }).join("");
+              box.querySelectorAll(".learn-del").forEach(function (b) {
+                b.addEventListener("click", async function () {
+                  try {
+                    await fetch("/api/learnings/" + b.dataset.id, { method: "DELETE" });
+                    pollLearnings();
+                  } catch (e) { /* ignore */ }
+                });
+              });
+            }
+          }
+          const ob = document.getElementById("observations-list");
+          if (ob) {
+            if (!obs.observations || !obs.observations.length) {
+              ob.innerHTML = '<div class="empty">Aucune démo enregistrée.</div>';
+            } else {
+              ob.innerHTML = obs.observations.map(function (x) {
+                const dir = (x.direction === "CALL" || x.direction === "BUY") ? "ACHAT" : "VENTE";
+                const ic = x.result === "win" ? "&#9989;" : ((x.result === "loose" || x.result === "lost") ? "&#10060;" : "…");
+                const pats = x.patterns ? (" · " + x.patterns) : " · (aucune figure)";
+                const tm = (x.sec_before_close != null) ? (" · " + Math.round(x.sec_before_close) + "s avant clôture") : "";
+                return '<div class="signal">' + ic + " <small>" + shortTime(x.ts) + "</small> " + dir + " " + x.asset + " " + x.amount + "$" + pats + tm + "</div>";
+              }).join("");
+            }
+          }
+          const ml = document.getElementById("methods-list");
+          if (ml) {
+              const desc = {
+              bullish_inside: "2 bougies vertes, la 2ᵉ plus petite avec mèche BASSE longue",
+              bullish_big_lower: "rouge + plus grande verte qui englobe son corps",
+              bearish_hammer: "bougie rouge + 2ᵉ à mèche BASSE dominante (longue)",
+              green_upper_pin: "bougie verte à mèche HAUTE dominante (longue)",
+              inverted_hammer: "rouge + verte à mèche HAUTE dominante (inverted hammer)"
+            };
+            const ms = mth.methods || [];
+            const G = "#22c55e", R = "#ef4444";
+            const icons = {
+              bullish_inside:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="12" y1="12" x2="12" y2="14" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="8" y="14" width="9" height="18" fill="' + G + '"/>' +
+                '<line x1="12" y1="32" x2="12" y2="34" stroke="' + G + '" stroke-width="2"/>' +
+                '<line x1="42" y1="22" x2="42" y2="24" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="37" y="24" width="10" height="6" fill="' + G + '"/>' +
+                '<line x1="42" y1="30" x2="42" y2="50" stroke="' + G + '" stroke-width="2"/></svg>',
+              bullish_big_lower:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="12" y1="18" x2="12" y2="40" stroke="' + R + '" stroke-width="2"/>' +
+                '<rect x="8" y="22" width="9" height="14" fill="' + R + '"/>' +
+                '<line x1="42" y1="12" x2="42" y2="14" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="36" y="14" width="12" height="30" fill="' + G + '"/>' +
+                '<line x1="42" y1="44" x2="42" y2="46" stroke="' + G + '" stroke-width="2"/></svg>',
+              bearish_hammer:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="12" y1="16" x2="12" y2="40" stroke="' + R + '" stroke-width="2"/>' +
+                '<rect x="8" y="18" width="9" height="20" fill="' + R + '"/>' +
+                '<line x1="42" y1="24" x2="42" y2="28" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="37" y="28" width="10" height="6" fill="' + G + '"/>' +
+                '<line x1="42" y1="34" x2="42" y2="54" stroke="' + G + '" stroke-width="2"/></svg>',
+              green_upper_pin:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="30" y1="8" x2="30" y2="28" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="25" y="28" width="10" height="14" fill="' + G + '"/>' +
+                '<line x1="30" y1="42" x2="30" y2="46" stroke="' + G + '" stroke-width="2"/></svg>',
+              inverted_hammer:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="12" y1="18" x2="12" y2="42" stroke="' + R + '" stroke-width="2"/>' +
+                '<rect x="8" y="22" width="9" height="16" fill="' + R + '"/>' +
+                '<line x1="42" y1="8" x2="42" y2="28" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="37" y="28" width="10" height="8" fill="' + G + '"/>' +
+                '<line x1="42" y1="36" x2="42" y2="42" stroke="' + G + '" stroke-width="2"/></svg>',
+              _buy:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="12" y1="20" x2="12" y2="40" stroke="' + R + '" stroke-width="2"/>' +
+                '<rect x="8" y="24" width="9" height="12" fill="' + R + '"/>' +
+                '<line x1="42" y1="12" x2="42" y2="16" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="36" y="16" width="12" height="26" fill="' + G + '"/>' +
+                '<line x1="42" y1="42" x2="42" y2="48" stroke="' + G + '" stroke-width="2"/></svg>',
+              _sell:
+                '<svg width="42" height="42" viewBox="0 0 60 60" style="flex:0 0 auto">' +
+                '<line x1="12" y1="12" x2="12" y2="16" stroke="' + G + '" stroke-width="2"/>' +
+                '<rect x="8" y="16" width="12" height="26" fill="' + G + '"/>' +
+                '<line x1="12" y1="42" x2="12" y2="48" stroke="' + G + '" stroke-width="2"/>' +
+                '<line x1="42" y1="20" x2="42" y2="40" stroke="' + R + '" stroke-width="2"/>' +
+                '<rect x="37" y="24" width="9" height="12" fill="' + R + '"/></svg>'
+            };
+            if (!ms.length) {
+              ml.innerHTML = '<div class="empty">Aucune méthode active.</div>';
+            } else {
+              ml.innerHTML = ms.map(function (m) {
+                const dir = m.direction === "BUY" ? "ACHAT" : "VENTE";
+                const d = m.desc || desc[m.name] || m.name;
+                const ic = icons[m.name] || (m.direction === "BUY" ? icons._buy : icons._sell) || "";
+                const pr = (m.pairs && m.pairs.length) ? (' · <span style="color:#8b95a7">' + m.pairs.join(", ") + "</span>") : "";
+                return '<div class="signal" style="display:flex;align-items:center;gap:10px">' + ic +
+                  "<span>• <b>" + dir + "</b> — " + d + pr + " · " + (m.expiry || 300) + "s</span></div>";
+              }).join("");
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      (function () {
+        const clearBtn = document.getElementById("learn-clear");
+        if (clearBtn) clearBtn.addEventListener("click", async function () {
+          try { await fetch("/api/learnings", { method: "DELETE" }); pollLearnings(); } catch (e) { /* ignore */ }
+        });
+        const toggleBtn = document.getElementById("learn-toggle");
+        if (toggleBtn) toggleBtn.addEventListener("click", function () {
+          const box = document.getElementById("learnings-list");
+          if (!box) return;
+          const hidden = box.style.display === "none";
+          box.style.display = hidden ? "" : "none";
+          toggleBtn.textContent = hidden ? "Masquer" : "Afficher";
+        });
+        const autoBtn = document.getElementById("learn-auto");
+        if (autoBtn) autoBtn.addEventListener("click", async function () {
+          try {
+            const r = await fetch("/api/learn/auto");
+            const a = await r.json();
+            const enabled = !a.enabled;
+            await fetch("/api/learn/auto", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ enabled: enabled }),
+            });
+            autoBtn.textContent = "Bot : suivre mon style (" + (enabled ? "ON" : "OFF") + ")";
+            pollLearnings();
+          } catch (e) { /* ignore */ }
+        });
+      })();
+
+      async function pollEvaluate() {
+        try {
+          const r = await fetch("/api/evaluate?limit=2000");
+          const d = await r.json();
+          const sum = document.getElementById("eval-summary");
+          if (sum) {
+            const o = d.overall || {};
+            const col = ((o.net || 0) >= 0) ? "#22c55e" : "#ef4444";
+            let s = "Global : " + (o.trades || 0) + " trades · " + (o.rate || 0) +
+              "% · net <b style=\"color:" + col + "\">" +
+              ((o.net || 0) >= 0 ? "+" : "") + (o.net || 0) + "$</b>";
+            if (d.best) {
+              s += "<br>La plus rentable : <b>" + d.best.name + "</b> — ROI moy " +
+                (d.best.avg_roi >= 0 ? "+" : "") + d.best.avg_roi + "% · " +
+                (d.best.rate || 0) + "% de réussite (" + d.best.trades + " trades)";
+            }
+            sum.innerHTML = s;
+          }
+          const box = document.getElementById("eval-table");
+          if (box) {
+            const list = (d.by_pattern || []).slice(0, 10);
+            if (!list.length) {
+              box.innerHTML = '<div class="empty">Pas encore assez de trades appris.</div>';
+            } else {
+              box.innerHTML = '<table class="tbl"><thead><tr><th>Méthode</th><th>Trades</th>' +
+                "<th>Réussite</th><th>ROI moy</th><th>Net</th></tr></thead><tbody>" +
+                list.map(function (x) {
+                  const c1 = (x.avg_roi >= 0) ? "win" : "loss";
+                  const c2 = (x.net >= 0) ? "win" : "loss";
+                  return "<tr><td>" + x.name + "</td><td>" + x.trades + "</td><td>" + x.rate +
+                    '%</td><td class="' + c1 + '">' + (x.avg_roi >= 0 ? "+" : "") + x.avg_roi +
+                    '%</td><td class="' + c2 + '">' + (x.net >= 0 ? "+" : "") + x.net + "$</td></tr>";
+                }).join("") + "</tbody></table>";
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      async function pollSimulate() {
+        try {
+          const stake = parseFloat(document.getElementById("sim-stake").value) || 10;
+          const r = await fetch("/api/simulate?stake=" + encodeURIComponent(stake));
+          const d = await r.json();
+          const sum = document.getElementById("sim-summary");
+          if (sum) {
+            const col = (d.net >= 0) ? "#22c55e" : "#ef4444";
+            sum.innerHTML = "Avec " + d.stake + "$ / trade : <b style=\"color:" + col + "\">" +
+              (d.net >= 0 ? "+" : "") + d.net + "$</b> sur " + d.trades + " trades · " +
+              d.rate + "% · ROI moy " + (d.roi_pct >= 0 ? "+" : "") + d.roi_pct + "%/trade";
+          }
+          const box = document.getElementById("sim-table");
+          if (box) {
+            const list = d.by_pattern || [];
+            if (!list.length) { box.innerHTML = '<div class="empty">Pas de données.</div>'; }
+            else box.innerHTML = '<table class="tbl"><thead><tr><th>Méthode</th><th>Trades</th>' +
+              "<th>Réussite</th><th>Gain @mise</th></tr></thead><tbody>" +
+              list.map(function (x) {
+                const c = (x.net >= 0) ? "win" : "loss";
+                return "<tr><td>" + x.name + "</td><td>" + x.trades + "</td><td>" + x.rate +
+                  '%</td><td class="' + c + '">' + (x.net >= 0 ? "+" : "") + x.net + "$</td></tr>";
+              }).join("") + "</tbody></table>";
+          }
+        } catch (e) { /* ignore */ }
+      }
+      (function () {
+        const el = document.getElementById("sim-stake");
+        if (el) el.addEventListener("input", pollSimulate);
+      })();
+
+      // La mise saisie pilote aussi le bot auto (enregistree cote serveur).
+      (function () {
+        const el = document.getElementById("order-amount");
+        if (!el) return;
+        let timer = null;
+        function push() {
+          const v = parseFloat(el.value);
+          if (!v || v <= 0) return;
+          fetch("/api/settings/amount", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ amount: v }),
+          }).catch(function () { /* ignore */ });
+        }
+        el.addEventListener("input", function () {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(push, 350);
+        });
+        // Au chargement : reprendre la derniere mise enregistree.
+        fetch("/api/settings/amount")
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (d && d.amount > 0) el.value = d.amount; })
+          .catch(function () { /* ignore */ });
+      })();
+
+      // Poignee glissable entre le graphique et le panneau (taille memorisee).
+      (function () {
+        const splitter = document.getElementById("splitter");
+        const main = document.querySelector("main");
+        if (!splitter || !main) return;
+        const KEY = "asideW";
+        function clamp(w) {
+          const total = main.clientWidth;
+          const min = 220;
+          const max = Math.max(min, total - 320);
+          return Math.max(min, Math.min(max, w));
+        }
+        function setWidth(w) {
+          main.style.setProperty("--aside-w", Math.round(w) + "px");
+          window.dispatchEvent(new Event("resize"));
+        }
+        try {
+          const saved = parseFloat(localStorage.getItem(KEY));
+          if (saved > 0) {
+            main.style.setProperty("--aside-w", Math.round(clamp(saved)) + "px");
+          }
+        } catch (e) { /* ignore */ }
+        let dragging = false;
+        splitter.addEventListener("pointerdown", function (e) {
+          dragging = true;
+          splitter.classList.add("dragging");
+          try { splitter.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+          document.body.style.userSelect = "none";
+          e.preventDefault();
+        });
+        splitter.addEventListener("pointermove", function (e) {
+          if (!dragging) return;
+          const rect = main.getBoundingClientRect();
+          setWidth(clamp(rect.right - e.clientX - 3));
+        });
+        function endDrag() {
+          if (!dragging) return;
+          dragging = false;
+          splitter.classList.remove("dragging");
+          document.body.style.userSelect = "";
+          try {
+            const w = parseFloat(main.style.getPropertyValue("--aside-w"));
+            if (w > 0) localStorage.setItem(KEY, String(Math.round(w)));
+          } catch (e) { /* ignore */ }
+        }
+        splitter.addEventListener("pointerup", endDrag);
+        splitter.addEventListener("pointercancel", endDrag);
+      })();
+
+      function _pcId(a) { return "pc-" + String(a).replace(/[^a-zA-Z0-9]/g, "_"); }
+      function miniBuild(ticks, tf) {
+        const buckets = new Map();
+        for (const t of ticks) {
+          const b = Math.floor(t.ts / tf) * tf;
+          const c = buckets.get(b);
+          if (!c) buckets.set(b, { ts: b, open: t.price, high: t.price, low: t.price, close: t.price });
+          else { c.high = Math.max(c.high, t.price); c.low = Math.min(c.low, t.price); c.close = t.price; }
+        }
+        return Array.from(buckets.values()).sort(function (a, b) { return a.ts - b.ts; });
+      }
+      function miniDraw(cv, candles, badge) {
+        const dpr = window.devicePixelRatio || 1;
+        const W = cv.clientWidth || 200, H = cv.clientHeight || 70;
+        cv.width = W * dpr; cv.height = H * dpr;
+        const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        const vis = (candles || []).slice(-24);
+        if (!vis.length) return;
+        let min = Infinity, max = -Infinity;
+        for (const c of vis) { if (c.low < min) min = c.low; if (c.high > max) max = c.high; }
+        if (min === max) { min -= 1e-6; max += 1e-6; }
+        const pad = (max - min) * 0.1; min -= pad; max += pad;
+        const n = vis.length; const cw = Math.max(1, Math.min(10, (W / n) * 0.7));
+        function y(v) { return (max - v) / (max - min) * H; }
+        for (let i = 0; i < n; i++) {
+          const c = vis[i]; const x = (i + 0.5) / n * W;
+          const up = c.close >= c.open; const col = up ? "#22c55e" : "#ef4444";
+          ctx.strokeStyle = col; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(x, y(c.high)); ctx.lineTo(x, y(c.low)); ctx.stroke();
+          ctx.fillStyle = col;
+          const yO = y(c.open), yC = y(c.close); const top = Math.min(yO, yC), h = Math.max(1, Math.abs(yC - yO));
+          ctx.fillRect(x - cw / 2, top, cw, h);
+        }
+        const lc = vis[vis.length - 1]; const up = lc.close >= lc.open;
+        if (badge) { badge.textContent = up ? "BUY" : "SELL"; badge.className = "pc-badge " + (up ? "buy" : "sell"); }
+      }
+      async function refreshPairsGrid() {
+        try {
+          const a = await (await fetch("/api/learn/auto")).json();
+          const mon = a.monitored || [];
+          const grid = document.getElementById("pairs-grid");
+          if (!grid) return;
+          const ids = new Set(mon.map(_pcId));
+          for (const el of Array.from(grid.children)) { if (!ids.has(el.id)) el.remove(); }
+          for (const asset of mon) {
+            const id = _pcId(asset);
+            let card = document.getElementById(id);
+            if (!card) {
+              card = document.createElement("div");
+              card.className = "pair-card"; card.id = id;
+              card.innerHTML = '<div class="pc-top"><span class="pc-name"></span><span class="pc-badge neutral" data-badge>--</span></div><canvas></canvas>';
+              card.querySelector(".pc-name").textContent = asset;
+              grid.appendChild(card);
+            }
+            const cv = card.querySelector("canvas");
+            const badge = card.querySelector("[data-badge]");
+            try {
+              const c = await (await fetch("/api/candles?asset=" + encodeURIComponent(asset) + "&timeframe=300&limit=40")).json();
+              let candles = c.candles || [];
+              const lastTs = candles.length ? Number(candles[candles.length - 1].ts) : 0;
+              const fresh = candles.length >= 5 && (Date.now() / 1000 - lastTs) <= 900;
+              if (!fresh) {
+                const t = await (await fetch("/api/ticks?asset=" + encodeURIComponent(asset) + "&limit=3000")).json();
+                candles = miniBuild(t.ticks || [], 300);
+              }
+              miniDraw(cv, candles, badge);
+            } catch (e) { /* ignore */ }
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      (function () {
+        const rc = document.getElementById("results-clear");
+        if (rc) rc.addEventListener("click", async function () {
+          try {
+            await fetch("/api/positions", { method: "DELETE" });
+            pollPositions();
+          } catch (e) { /* ignore */ }
+        });
+      })();
+
+      async function sendOrder(direction) {
+        const el = document.getElementById("order-status");
+        const amount = parseFloat(document.getElementById("order-amount").value) || 1;
+        const label = direction === "BUY" ? "ACHAT (Buy)" : "VENTE (Sell)";
+        const modeChk = document.querySelector('input[name="account-mode"]:checked');
+        const modeLabel = (modeChk && modeChk.value === "real") ? "RÉEL" : "DÉMO";
+        el.textContent = "Envoi de l'ordre…";
+        const body = { asset: state.asset, direction: direction, amount: amount, confirm: "YES" };
+        const expEl = document.getElementById("order-expiry");
+        if (expEl) {
+          const v = parseInt(expEl.value, 10);
+          if (v) body.expiry = v;
+        }
+        try {
+          const res = await fetch("/api/order", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (!res.ok) { el.textContent = "Erreur: " + (data.detail || "inconnue"); return; }
+          el.textContent = "Ordre #" + data.order_id + " envoyé — voir le statut ci-dessous";
+          pollPositions();
+        } catch (e) { el.textContent = "Erreur: " + e.message; }
+      }
+
+      document.getElementById("btn-buy").addEventListener("click", function () { sendOrder("BUY"); });
+      document.getElementById("btn-sell").addEventListener("click", function () { sendOrder("SELL"); });
+
+      function setAccountUI(mode) {
+        const radios = document.querySelectorAll('input[name="account-mode"]');
+        for (const r of radios) r.checked = (r.value === mode);
+        const d = document.getElementById("acct-demo");
+        const rr = document.getElementById("acct-real");
+        if (d) d.classList.toggle("active", mode !== "real");
+        if (rr) rr.classList.toggle("active", mode === "real");
+      }
+
+      async function loadAccount() {
+        try {
+          const res = await fetch("/api/account");
+          const data = await res.json();
+          setAccountUI(data.mode || "demo");
+          const note = document.getElementById("account-note");
+          if (note) {
+            const demo = (data.balances || []).find(function (b) { return b.type === 4; });
+            const real = (data.balances || []).find(function (b) { return b.type === 1; });
+            const fmt = function (b) { return b ? (b.amount + " " + (b.currency || "")) : "?"; };
+            if (data.mode === "real") {
+              note.style.color = "#ef4444";
+              note.innerHTML = "⚠ <b>RÉEL</b> — solde " + fmt(real) + " · démo " + fmt(demo);
+            } else {
+              note.style.color = "#22c55e";
+              note.innerHTML = "<b>DÉMO</b> — solde " + fmt(demo) + " · réel " + fmt(real);
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      async function changeAccount(mode) {
+        const note = document.getElementById("account-note");
+        try {
+          const res = await fetch("/api/account", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: mode }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            note.style.color = "#f5a524";
+            note.textContent = "Refusé: " + (data.detail || "inconnu");
+            setAccountUI("demo");
+            return;
+          }
+          loadAccount();
+        } catch (err) { /* ignore */ }
+      }
+
+      document.querySelectorAll('input[name="account-mode"]').forEach(function (r) {
+        r.addEventListener("change", function (e) { changeAccount(e.target.value); });
+      });
+      loadAccount();
+
+      updateOrderAsset();
+      setInterval(updateOrderAsset, 2000);
+      pollPositions();
+      setInterval(pollPositions, 3000);
+      pollLearnings();
+      setInterval(pollLearnings, 3000);
+      // Rafraichissement doux (mobile) toutes les 3 s.
+      setInterval(function () {
+        if (document.hidden) return;
+        try { if (typeof loadServerCandles === "function") loadServerCandles(); } catch (e) { /* ignore */ }
+        try { if (typeof loadSignals === "function") loadSignals(); } catch (e) { /* ignore */ }
+      }, 3000);
+      pollEvaluate();
+      setInterval(pollEvaluate, 3000);
+      pollSimulate();
+      refreshPairsGrid();
+      setInterval(refreshPairsGrid, 4000);
+
+      pollLive();
+      pollPattern();
+
+      // ---- flux de donnees -------------------------------------------
+      function appendTick(t) {
+        const prev = state.lastPrice;
+        state.ticks.push({ ts: t.ts, price: t.price });
+        if (state.ticks.length > 6000) state.ticks.splice(0, state.ticks.length - 6000);
+        state.lastPrice = t.price;
+        state.lastTickAt = Date.now() / 1000;
+        setPrice(t.price, prev);
+      }
+
+      // "live" seulement si des ticks arrivent ; sinon "pas de flux".
+      function updateFreshness() {
+        if (!state.ws || state.ws.readyState !== 1) return;
+        const age = state.lastTickAt ? Date.now() / 1000 - state.lastTickAt : Infinity;
+        if (age > 15) {
+          const label = isFinite(age) ? "pas de flux (" + Math.round(age) + " s)" : "pas de flux";
+          setStatus(label, "err");
+        } else {
+          setStatus("live", "live");
+        }
+      }
+      function updateStats(stats) {
+        if (!stats) return;
+        document.getElementById("s-ticks").textContent = stats.ticks;
+        document.getElementById("s-candles").textContent = stats.candles;
+      }
+
+      const ASSET_GROUP_ORDER = ["Forex", "marginal-forex", "Crypto", "marginal-crypto", "Index", "Commodity", "Stock", "ETF", "marginal-cfd"];
+      const ASSET_GROUP_LABEL = {
+        "Forex": "Forex", "marginal-forex": "Forex CFD",
+        "Crypto": "Crypto", "marginal-crypto": "Crypto CFD",
+        "Index": "Indices", "Commodity": "Matières premières",
+        "Stock": "Actions", "ETF": "ETF", "marginal-cfd": "CFD",
+      };
+
+      async function loadAssets() {
+        const responses = await Promise.all([fetch("/api/assets"), fetch("/api/status")]);
+        const cat = await responses[0].json();
+        const data = await responses[1].json();
+        state.liveAssets = new Set((data.live_assets || []).map(function (x) { return x.name; }));
+        if (!queryAsset && data.focus_asset) state.asset = data.focus_asset;
+        state.lastLivePrimary = (data.live_assets && data.live_assets.length) ? data.live_assets[0].name : null;
+
+        let list = (cat.assets && cat.assets.length) ? cat.assets.slice() : [];
+        if (!list.length) {
+          list = (data.asset_names || []).map(function (n) { return { name: n, type: null }; });
+        }
+        if (!list.some(function (a) { return a.name === state.asset; })) {
+          list.push({ name: state.asset, type: null });
+        }
+
+        const groups = new Map();
+        for (const a of list) {
+          const g = a.type || "Autres";
+          if (!groups.has(g)) groups.set(g, []);
+          groups.get(g).push(a.name);
+        }
+
+        const sel = document.getElementById("asset");
+        sel.innerHTML = "";
+        const keys = Array.from(groups.keys()).sort(function (x, y) {
+          const ix = ASSET_GROUP_ORDER.indexOf(x), iy = ASSET_GROUP_ORDER.indexOf(y);
+          return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy) || x.localeCompare(y);
+        });
+        for (const g of keys) {
+          const og = document.createElement("optgroup");
+          const names = groups.get(g).slice().sort();
+          og.label = (ASSET_GROUP_LABEL[g] || g) + " (" + names.length + ")";
+          for (const n of names) {
+            const opt = document.createElement("option");
+            opt.value = n;
+            opt.dataset.base = n;
+            opt.textContent = n + (state.liveAssets.has(n) ? " ●" : "");
+            if (n === state.asset) opt.selected = true;
+            og.appendChild(opt);
+          }
+          sel.appendChild(og);
+        }
+        updateStats(data.stats);
+        updatePairWarn();
+      }
+
+      function updatePairWarn() {
+        const warn = document.getElementById("pair-warn");
+        if (!warn) return;
+        const live = state.liveAssets || new Set();
+        if (live.size && !live.has(state.asset)) {
+          warn.textContent =
+            "Pas de flux live pour " + state.asset +
+            ". Ouvre cette paire dans la fenêtre Chromium pour le direct. Paires actives : " +
+            Array.from(live).join(", ") + " (week-end : versions -OTC).";
+        } else {
+          warn.textContent = "";
+        }
+      }
+
+      async function refreshLiveInfo() {
+        try {
+          const res = await fetch("/api/status");
+          const data = await res.json();
+          state.liveAssets = new Set((data.live_assets || []).map(function (x) { return x.name; }));
+          const sel = document.getElementById("asset");
+          for (const opt of sel.options) {
+            const base = opt.dataset.base || opt.value;
+            const txt = base + (state.liveAssets.has(base) ? " ●" : "");
+            if (opt.textContent !== txt) opt.textContent = txt;
+          }
+          // La paire affichee reste FIXE sur le choix de l'utilisateur.
+          // (pas d'auto-bascule : plusieurs plotters alimentent des paires a la fois)
+          updatePairWarn();
+        } catch (e) { /* ignore */ }
+      }
+
+      async function loadHistory() {
+        const res = await fetch("/api/ticks?asset=" + encodeURIComponent(state.asset) + "&limit=6000");
+        const data = await res.json();
+        state.ticks = data.ticks || [];
+        state.lastPrice = state.ticks.length ? state.ticks[state.ticks.length - 1].price : null;
+        if (state.lastPrice !== null) setPrice(state.lastPrice, null);
+        draw();
+      }
+
+      async function loadServerCandles() {
+        try {
+          const res = await fetch("/api/candles?asset=" + encodeURIComponent(state.asset) + "&timeframe=300&limit=3000");
+          const data = await res.json();
+          state.serverCandles = data.candles || [];
+          if (state.mode === "candles" && state.tf >= 300) draw();
+        } catch (e) { /* ignore */ }
+      }
+
+      function upsertServerCandle(c) {
+        if (!c || typeof c.ts !== "number") return;
+        const arr = state.serverCandles;
+        let lo = 0, hi = arr.length - 1, idx = -1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (arr[mid].ts === c.ts) { idx = mid; break; }
+          if (arr[mid].ts < c.ts) lo = mid + 1; else hi = mid - 1;
+        }
+        if (idx >= 0) arr[idx] = c;
+        else { arr.splice(lo, 0, c); if (arr.length > 3000) arr.shift(); }
+      }
+
+      async function loadSignals() {
+        try {
+          const res = await fetch("/api/signals?asset=" + encodeURIComponent(state.asset) + "&limit=8");
+          const data = await res.json();
+          const box = document.getElementById("signals");
+          if (!data.signals || !data.signals.length) { box.innerHTML = '<div class="empty">Aucun signal</div>'; return; }
+          box.innerHTML = data.signals.map(function (sig) {
+            return '<div class="signal ' + sig.kind + '">' + sig.kind + ' &middot; ' +
+              (typeof sig.strength === "number" ? sig.strength.toFixed(1) : sig.strength) +
+              '<br><small>' + (sig.note || "") + "</small></div>";
+          }).join("");
+        } catch (e) { /* ignore */ }
+      }
+
+      let reconnectTimer = null;
+      let reconnectDelay = 1000;
+      let lastMsgAt = Date.now();
+
+      function connect() {
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        if (state.ws) {
+          try { state.ws.onclose = null; state.ws.close(); } catch (e) { /* ignore */ }
+          state.ws = null;
+        }
+        setStatus("connexion...", "");
+        const proto = location.protocol === "https:" ? "wss" : "ws";
+        const ws = new WebSocket(proto + "://" + location.host + "/ws?asset=" + encodeURIComponent(state.asset));
+        state.ws = ws;
+        ws.onopen = function () {
+          reconnectDelay = 1000;
+          lastMsgAt = Date.now();
+          setStatus("live", "live");
+        };
+        ws.onclose = function () {
+          if (state.ws !== ws) return;
+          setStatus("reconnexion...", "err");
+          const d = reconnectDelay;
+          reconnectDelay = Math.min(15000, Math.round(reconnectDelay * 1.7));
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(function () {
+            reconnectTimer = null;
+            connect();
+          }, d + Math.floor(Math.random() * 400));
+        };
+        ws.onerror = function () { try { ws.close(); } catch (e) { /* ignore */ } };
+        ws.onmessage = function (ev) {
+          lastMsgAt = Date.now();
+          let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+          if (msg.type === "ticks" && Array.isArray(msg.data)) {
+            for (const t of msg.data) { if (!t.asset || t.asset === state.asset) appendTick(t); }
+            scheduleDraw();
+          } else if (msg.type === "candle" && msg.data) {
+            if (!msg.data.asset || msg.data.asset === state.asset) {
+              upsertServerCandle(msg.data);
+              if (state.mode === "candles") scheduleDraw();
+            }
+          } else if (msg.type === "ping") {
+            updateStats(msg.stats);
+          }
+        };
+      }
+
+      // Watchdog : si le socket est mort ou silencieux, on reconnecte.
+      setInterval(function () {
+        if (document.hidden) return;
+        if (!state.ws || state.ws.readyState === 2 || state.ws.readyState === 3) {
+          connect();
+          return;
+        }
+        if (state.ws.readyState === 1 && Date.now() - lastMsgAt > 12000) {
+          try { state.ws.close(); } catch (e) { /* ignore */ }
+        }
+      }, 5000);
+
+      // Retour d'ecran / veille / reseau : reconnexion immediate + rafraichissement.
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) {
+          reconnectDelay = 1000;
+          if (!state.ws || state.ws.readyState !== 1) connect();
+          if (typeof loadServerCandles === "function") loadServerCandles();
+          if (typeof pollPositions === "function") pollPositions();
+          if (typeof pollLearnings === "function") pollLearnings();
+        }
+      });
+      window.addEventListener("online", function () { reconnectDelay = 1000; connect(); });
+
+      function setMode(mode) {
+        state.mode = mode;
+        document.getElementById("mode-candles").classList.toggle("active", mode === "candles");
+        document.getElementById("mode-line").classList.toggle("active", mode === "line");
+        state.view = null; state.follow = false;
+        draw();
+      }
+
+      document.getElementById("mode-candles").addEventListener("click", function () { setMode("candles"); });
+      document.getElementById("mode-line").addEventListener("click", function () { setMode("line"); });
+      document.getElementById("tf").addEventListener("change", function (e) {
+        state.tf = parseInt(e.target.value, 10) || 300;
+        state.view = null; state.follow = false;
+        draw();
+      });
+      function switchAsset(name, syncIQ) {
+        if (!name) return;
+        if (syncIQ) {
+          // pilote aussi le traderoom IQ (change l'actif affiche cote IQ)
+          fetch("/api/switch", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ asset: name }),
+          }).catch(function () { /* ignore */ });
+        }
+        if (name === state.asset) return;
+        state.asset = name;
+        try { history.replaceState(null, "", "?asset=" + encodeURIComponent(name)); } catch (e) { /* ignore */ }
+        const sel = document.getElementById("asset");
+        if (sel && sel.value !== name) sel.value = name;
+        state.ticks = []; state.lastPrice = null; state.view = null; state.follow = false;
+        state.serverCandles = []; state.lastTickAt = 0;
+        updatePairWarn();
+        loadHistory().then(function () { return loadServerCandles(); }).then(function () { loadSignals(); connect(); });
+      }
+
+      document.getElementById("asset").addEventListener("change", function (e) {
+        switchAsset(e.target.value, true);
+      });
+
+      if (window.ResizeObserver) new ResizeObserver(function () { scheduleDraw(); }).observe(wrap);
+      else window.addEventListener("resize", scheduleDraw);
+      window.addEventListener("resize", scheduleDraw);
+      window.addEventListener("orientationchange", function () { setTimeout(scheduleDraw, 250); });
+
+      (async function init() {
+        try {
+          drawMessage(wrap.clientWidth, wrap.clientHeight, "Chargement…");
+          await loadAssets();
+          await loadHistory();
+          await loadServerCandles();
+          await loadSignals();
+          await loadAIConfig();
+          connect();
+          setInterval(loadSignals, 15000);
+          setInterval(updateFreshness, 2000);
+          setInterval(refreshLiveInfo, 4000);
+          updateCandleTimer();
+          setInterval(updateCandleTimer, 1000);
+        } catch (err) {
+          showError("Impossible de charger les données : " + err.message);
+          setStatus("erreur", "err");
+          draw();
+        }
+      })();
+    })();
+
+      (function () {
+        function toast(msg) {
+          const t = document.getElementById("refresh-toast");
+          if (!t) return;
+          t.textContent = msg;
+          t.classList.add("show");
+          setTimeout(function () { t.classList.remove("show"); }, 1100);
+        }
+        async function refreshAll() {
+          try {
+            if (typeof pollPositions === "function") pollPositions();
+            if (typeof pollLearnings === "function") pollLearnings();
+            if (typeof pollLive === "function") pollLive();
+            if (typeof pollPattern === "function") pollPattern();
+            if (typeof pollEvaluate === "function") pollEvaluate();
+            if (typeof pollSimulate === "function") pollSimulate();
+            if (typeof loadServerCandles === "function") loadServerCandles();
+            if (typeof loadSignals === "function") loadSignals();
+            if (typeof updateFreshness === "function") updateFreshness();
+            if (typeof pollPositions !== "function" && typeof pollLearnings !== "function") {
+              location.reload();
+              return;
+            }
+            toast("Actualisé");
+          } catch (e) {
+            location.reload();
+          }
+        }
+        const sb = document.getElementById("sound-test");
+        function renderSound() {
+          if (!sb) return;
+          sb.textContent = soundOn ? "🔔 Son ON" : "🔕 Son OFF";
+          sb.style.background = soundOn ? "#22c55e" : "#161d2b";
+          sb.style.color = soundOn ? "#04140a" : "#e6e9ef";
+          sb.style.borderColor = soundOn ? "#22c55e" : "#263042";
+          sb.style.fontWeight = "700";
+        }
+        try {
+          const saved = localStorage.getItem("iq_sound");
+          if (saved === "0") soundOn = false;
+        } catch (e) { /* ignore */ }
+        renderSound();
+        if (sb) sb.addEventListener("click", function () {
+          soundOn = !soundOn;
+          try { localStorage.setItem("iq_sound", soundOn ? "1" : "0"); } catch (e) { /* ignore */ }
+          renderSound();
+          if (soundOn) {
+            unlockAudio();
+            playBeep(true);
+            setTimeout(function () { playBeep(false); }, 320);
+          }
+          const t = document.getElementById("refresh-toast");
+          if (t) {
+            t.textContent = soundOn ? "Son activé" : "Son coupé";
+            t.classList.add("show");
+            setTimeout(function () { t.classList.remove("show"); }, 1100);
+          }
+        });
+        const a = document.getElementById("refresh-top");
+        if (a) a.addEventListener("click", refreshAll);
+        const b = document.getElementById("refresh-float");
+        if (b) b.addEventListener("click", refreshAll);
+      })();
+  </script>
+  <button id="refresh-float" title="Actualiser">&#8635; Actualiser</button>
+  <div id="refresh-toast">Actualisé</div>
+  <div id="reject-banner"><span id="reject-text"></span></div>
+</body>
+</html>
