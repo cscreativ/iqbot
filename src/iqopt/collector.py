@@ -48,6 +48,42 @@ JS_SEND = """
 """
 
 
+_NAMED_METHOD_DESC = {
+    "bullish_inside": "2 bougies vertes, la 2ᵉ plus petite avec mèche BASSE longue",
+    "bullish_big_lower": "rouge + plus grande verte qui englobe son corps",
+    "bearish_hammer": "bougie rouge + 2ᵉ à mèche BASSE dominante (longue)",
+    "green_upper_pin": "bougie verte à mèche HAUTE dominante (longue)",
+    "inverted_hammer": "rouge + verte à mèche HAUTE dominante (inverted hammer)",
+    "t3": "3 bougies (rouge 2 mèches, grande rouge, verte mèche basse) -> BUY",
+    "r1": "3 rouges + engulfing verte -> BUY",
+}
+
+
+def forced_methods_from_env() -> list:
+    """Methodes declarees dans IQ_FORCED_METHODS (nom:SENS:expiration), pour l'affichage."""
+    from .patterns import DISCOVERED_PATTERNS
+
+    desc = {n: d for n, _t, _dir, d in DISCOVERED_PATTERNS}
+    desc.update(_NAMED_METHOD_DESC)
+    out = []
+    for part in (os.getenv("IQ_FORCED_METHODS", "") or "").split(","):
+        bits = [b.strip() for b in part.strip().split(":")]
+        if not bits or not bits[0]:
+            continue
+        direction = bits[1].upper() if len(bits) > 1 else "SELL"
+        expiry = int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 300
+        out.append(
+            {
+                "name": bits[0],
+                "direction": direction if direction in ("BUY", "SELL") else "SELL",
+                "expiry": expiry,
+                "desc": desc.get(bits[0], ""),
+                "pairs": [],
+            }
+        )
+    return out
+
+
 class Collector:
     def __init__(
         self,
@@ -727,8 +763,26 @@ class Collector:
         except Exception:  # noqa: BLE001
             pass
 
+    def _publish_active_methods(self, only_if_empty: bool = False) -> None:
+        """Publie la liste des methodes pour le dashboard, sans attendre d'avoir appris
+        une strategie (affichage uniquement : n'influence pas les decisions de trading)."""
+        try:
+            if only_if_empty:
+                try:
+                    if json.loads(self.db.get_meta("active_methods") or "[]"):
+                        return
+                except Exception:  # noqa: BLE001
+                    pass
+            items = forced_methods_from_env()
+            if items:
+                self.db.set_meta("active_methods", json.dumps(items, ensure_ascii=False))
+                print(f"[methods] {len(items)} methodes publiees pour le dashboard", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[methods] publication impossible: {exc}", flush=True)
+
     async def _auto_loop(self, page) -> None:
         print("[auto] boucle apprentissage prete (compte selon le mode choisi)", flush=True)
+        self._publish_active_methods()
         try:
             period = int(os.getenv("IQ_ALIGN_PERIOD", "300") or 300)
         except ValueError:
@@ -761,6 +815,7 @@ class Collector:
                 if (self.db.get_meta("learn_auto") or "0") == "1":
                     self.db.set_meta("auto_last_check", str(time.time()))
                     await self._auto_step(page)
+                self._publish_active_methods(only_if_empty=True)
             except Exception as exc:  # noqa: BLE001
                 print(f"[auto] erreur: {exc}", flush=True)
 
@@ -774,7 +829,9 @@ class Collector:
         print("[ags] boucle AGS prete", flush=True)
         while True:
             try:
-                if (self.db.get_meta("ags_enabled") or "1") == "1":
+                if (self.db.get_meta("ags_enabled") or "1") == "1" and os.getenv(
+                    "IQ_METHODS_ONLY", "0"
+                ) != "1":
                     await self._ags_step(page, cfg)
             except Exception as exc:  # noqa: BLE001
                 print(f"[ags] erreur: {exc}", flush=True)
@@ -887,6 +944,8 @@ class Collector:
             await asyncio.sleep(1.5)
 
     async def _preclose_step(self, page) -> None:
+        if os.getenv("IQ_METHODS_ONLY", "0") == "1":
+            return  # mode methodes seules : la direction de bougie n'est pas une methode
         if os.getenv("IQ_PRECLOSE_ONLY", "1") != "1":
             return
         mon = [a for a in (self.db.get_meta("auto_monitored") or "").split(",") if a]
@@ -1010,7 +1069,9 @@ class Collector:
         print("[counter] boucle contre-trade prete (T-4s)", flush=True)
         while True:
             try:
-                if os.getenv("IQ_COUNTER_ENABLED", "0") == "1" and (
+                if os.getenv("IQ_COUNTER_ENABLED", "0") == "1" and os.getenv(
+                    "IQ_METHODS_ONLY", "0"
+                ) != "1" and (
                     self.db.get_meta("learn_auto") or "1"
                 ) == "1":
                     await self._counter_step(page)
@@ -1140,9 +1201,12 @@ class Collector:
             real_mode = (self.db.get_meta("order_account") or "demo").lower() == "real"
         except Exception:  # noqa: BLE001
             real_mode = False
+        # Mode "methodes seules" : on ne suit QUE les methodes de IQ_FORCED_METHODS
+        # (sens + expiration fixes), sans strategie apprise ni filtre issu des trades.
+        methods_only = os.getenv("IQ_METHODS_ONLY", "0") == "1"
         all_samples = self.db.get_samples(3000)
         strat = build_strategy(all_samples, tradable_assets=tradable)
-        if not strat and not (imitation_general or imitation_strict):
+        if not strat and not (imitation_general or imitation_strict or methods_only):
             return
         if imitation_general or imitation_strict:
             # On apprend directement les figures de tes demos gagnantes (min 1).
@@ -1160,6 +1224,8 @@ class Collector:
                 allowed = list(seen)
         else:
             allowed = list(strat.get("allowed") or []) if strat else []
+        if methods_only:
+            allowed = []
         # Methodes forcees par l'utilisateur (ex: 2 bougies vertes -> SELL).
         forced: dict = {}
         try:
@@ -1275,6 +1341,8 @@ class Collector:
             for pat, pairs in pr.items():
                 if isinstance(pairs, list):
                     pair_allow[str(pat)] = {str(x) for x in pairs if x}
+        if methods_only:
+            pair_allow = {}
         if pair_allow:
             logic = logic | set(pair_allow)
             if forced:
@@ -1331,9 +1399,11 @@ class Collector:
                     live_ok = ok
         except Exception:  # noqa: BLE001
             live_ok = None
+        if methods_only:
+            live_ok = None
         if not allowed and not (imitation_strict or imitation_general):
             return
-        if strat is None:
+        if strat is None or methods_only:
             # Mode imitation : pas de strategie globale, valeurs par defaut.
             strat = {"allowed": allowed, "directions": {}, "expiry": 300}
         # Mise auto : le bot suit STRICTEMENT la mise saisie par l'utilisateur.
@@ -1714,7 +1784,10 @@ class Collector:
             except Exception:  # noqa: BLE001
                 hits = []
             # Respect de l'apprentissage : on ne trade que les figures positives apprises.
-            if imitation_general:
+            if methods_only:
+                # Uniquement les methodes actives (IQ_FORCED_METHODS) detectees.
+                inter = [p for p in allowed if p in hits and p in forced]
+            elif imitation_general:
                 if logic:
                     # Uniquement les setups de la logique, et par paire autorisee.
                     inter = [
@@ -1738,7 +1811,7 @@ class Collector:
                 inter = [p for p in inter if p in live_ok]
             scan.append({"asset": asset, "bars": len(candles), "patterns": hits, "matched": inter})
             # Mode pre-cloture actif : les ordres sont passes par _preclose_step (T-5s).
-            if os.getenv("IQ_PRECLOSE_ONLY", "1") == "1":
+            if os.getenv("IQ_PRECLOSE_ONLY", "1") == "1" and not methods_only:
                 continue
             trade_anyway = os.getenv("IQ_AUTO_TRADE_EVERY_BAR", "1") == "1"
             if not inter and not trade_anyway:
@@ -1869,6 +1942,10 @@ class Collector:
         return out or c
 
     def _build_auto_message(self, direction: str, asset: str, amount: float, expiry_size: int) -> dict:
+        # Garde-fou commun aux boucles auto/AGS/preclose/counter : sans
+        # IQ_ENABLE_EXECUTION=1, aucun ordre n'est construit ni envoye.
+        if not self.settings.enable_execution:
+            raise ValueError("execution desactivee (IQ_ENABLE_EXECUTION=0)")
         template = dict(self.order_template or {})
         name = asset.upper()
         aid = self.asset_ids.get(name)

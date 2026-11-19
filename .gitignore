@@ -6,3 +6,4 @@ captures/
 .env
 playwright_state.json
 *.log
+.env.deploy
