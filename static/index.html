@@ -194,6 +194,18 @@
       font-size: 13px; line-height: 46px; animation: rejectScroll 6s linear infinite;
     }
     @keyframes rejectScroll { from { transform: translateY(46px); } to { transform: translateY(-100%); } }
+
+    /* En-tete adaptatif mobile */
+    @media (max-width: 820px) {
+      header { gap: 6px; padding: 6px 8px; }
+      header h1 { flex: 1 0 100%; order: -1; font-size: 13px; margin: 0; }
+      header #asset { flex: 1 1 100%; width: 100%; max-width: 100%; font-size: 13px; }
+      header select, header button { font-size: 12.5px; padding: 6px 8px; border-radius: 7px; }
+      header #zoom-in, header #zoom-out { width: 30px; padding: 6px 0; }
+      header #sound-test, header #refresh-top, header #pairs-refresh,
+      header #methods-analyse, header #chart-fit { padding: 6px 8px; }
+      header .badge { margin-left: 0; }
+    }
   </style>
 </head>
 <body>
@@ -213,6 +225,10 @@
     <button id="replay-open" hidden title="Replay / backtest IA sur l'historique">Replay</button>
     <button id="sound-test" title="Activer/tester le son">&#128276; Son</button>
     <button id="refresh-top" title="Actualiser les données">&#8635; Actualiser</button>
+    <button id="pairs-refresh" title="Ajouter les paires actives et retirer les inactives">&#8635; Paires</button>
+    <button id="methods-analyse" title="Analyser les marchés et proposer des méthodes" style="background:#2563eb;color:#fff;font-weight:700;border-color:#2563eb;">&#128202; Analyser</button>
+    <button id="chart-fit" title="Ajuster le graphique (taille + vue par défaut)">&#10530; Ajuster</button>
+    <button id="ags-auto-timing" title="Activer/désactiver le timing automatique AGS">Timing auto : ON</button>
     <span class="badge"><span id="dot" class="dot"></span><span id="conn">connexion...</span></span>
   </header>
   <div id="error"></div>
@@ -221,6 +237,11 @@
     <div id="chart-wrap"><canvas id="chart"></canvas><div id="sel-overlay"></div><div id="sel-rect"></div></div>
     <div id="splitter" title="Glisser pour redimensionner"></div>
     <aside>
+      <div style="border:1px solid #2563eb;border-radius:10px;padding:8px;background:rgba(37,99,235,.06);">
+        <div class="section-title" style="margin-top:0;color:#2563eb;">AGS TREND PRO <span id="ags-asset" style="color:#e6e9ef;font-weight:600;margin-left:6px;"></span></div>
+        <div id="ags-table" class="sub"><div class="empty">—</div></div>
+        <div id="ags-timing" class="sub" style="margin-top:4px;font-weight:700;color:#f59e0b;"></div>
+      </div>
       <div>
         <div class="price-label">Dernier prix</div>
         <div id="price" class="price">--</div>
@@ -255,6 +276,17 @@
         </div>
         <div id="account-note" class="sub" style="margin-top:4px;">Mode DÉMO (test)</div>
         <div class="row"><label>Mise</label><input id="order-amount" type="number" min="1" step="1" value="1"></div>
+        <div class="row"><label>Durée</label>
+          <select id="trade-expiry">
+            <option value="0">Auto (selon paire)</option>
+            <option value="30">30 s</option>
+            <option value="45">45 s</option>
+            <option value="60">60 s</option>
+            <option value="120">120 s</option>
+            <option value="200">200 s</option>
+            <option value="300">300 s</option>
+          </select>
+        </div>
         <div class="order-btns">
           <button id="btn-buy">ACHAT</button>
           <button id="btn-sell">VENTE</button>
@@ -277,6 +309,17 @@
           <button id="learn-clear" style="padding:4px 8px;font-size:11px;">Effacer tout</button>
           <button id="learn-toggle" style="padding:4px 8px;font-size:11px;margin-left:6px;">Masquer</button>
         </div>
+        <div class="row" style="margin-top:6px;"><label>Durée algo AGS</label>
+          <select id="ags-expiry">
+            <option value="0">Auto (300 s)</option>
+            <option value="30">30 s</option>
+            <option value="45">45 s</option>
+            <option value="60">60 s</option>
+            <option value="120">120 s</option>
+            <option value="200">200 s</option>
+            <option value="300">300 s</option>
+          </select>
+        </div>
         <div id="learn-summary" class="sub"></div>
         <div id="learn-live" class="sub" style="margin-top:2px;color:#22c55e;font-weight:600;"></div>
         <div id="learn-profile" class="sub" style="margin-top:4px;"></div>
@@ -287,6 +330,7 @@
         <div id="bot-pairs" class="sub" style="margin-top:2px;"></div>
         <div class="section-title" style="margin-top:8px;">Méthodes actives</div>
         <div id="methods-list" class="sub"><div class="empty">…</div></div>
+        <div id="proposals" class="sub"></div>
         <div id="learnings-list" style="margin-top:6px;"><div class="empty">Le bot observe…</div></div>
       </div>
       <div>
@@ -401,7 +445,7 @@
       const queryAsset = query.get("asset");
 
       const PAD = { l: 10, r: 74, t: 14, b: 28 };
-      const AUTO_CANDLES = 60;   // fenetre par defaut : 60 bougies visibles
+      const AUTO_CANDLES = 24;   // fenetre par defaut : ~24 bougies visibles (style IQ)
       const AUTO_LINE = 400;     // fenetre par defaut en mode ligne
 
       const state = {
@@ -410,7 +454,7 @@
         mode: "candles",   // "candles" | "line"
         tf: 300,           // intervalle des bougies (s)
         view: null,        // { t0, t1 } fenêtre temporelle, null = tout afficher
-        follow: false,     // suivre le live quand on est collé au bord droit
+        follow: true,      // suivre le live par defaut
         serverCandles: [], // bougies 5 min reelles (historique IQ + live)
         selRegion: null,   // zone capturee (coordonnees CSS)
         lastMapping: null, // mapping x <-> temps du dernier rendu
@@ -585,7 +629,7 @@
       }
       function playBeep(up) {
         try {
-          if (!soundOn) return;
+          if (window.__soundOn === false) return;
           unlockAudio();
           if (!audioCtx) return;
           const o = audioCtx.createOscillator();
@@ -599,6 +643,9 @@
       }
       document.addEventListener("touchstart", unlockAudio, { once: true });
       document.addEventListener("click", unlockAudio, { once: true });
+      window.__unlockAudio = unlockAudio;
+      window.__playBeep = playBeep;
+      if (window.__soundOn === undefined) window.__soundOn = true;
 
       function drawMessage(w, h, text) {
         ctx.fillStyle = "#0b0f17"; ctx.fillRect(0, 0, w, h);
@@ -663,6 +710,16 @@
           }
         }
         return false;
+      }
+
+      function roundRect(c, x, y, w, h, r) {
+        c.beginPath();
+        c.moveTo(x + r, y);
+        c.arcTo(x + w, y, x + w, y + h, r);
+        c.arcTo(x + w, y + h, x, y + h, r);
+        c.arcTo(x, y + h, x, y, r);
+        c.arcTo(x, y, x + w, y, r);
+        c.closePath();
       }
 
       function draw() {
@@ -738,8 +795,15 @@
           ctx.fillText(fmtPrice(v), PAD.l + plotW + 8, y);
         }
 
+        // grille verticale (style IQ)
+        ctx.strokeStyle = "#141b27";
+        for (let i = 0; i <= 4; i++) {
+          const gx = PAD.l + plotW * (i / 4);
+          ctx.beginPath(); ctx.moveTo(gx, PAD.t); ctx.lineTo(gx, PAD.t + plotH); ctx.stroke();
+        }
+
         if (useCandles) {
-          const cw = Math.max(1, Math.min(42, (state.tf / (t1 - t0)) * plotW * 0.7));
+          const cw = Math.max(2, Math.min(30, (state.tf / (t1 - t0)) * plotW * 0.62));
           for (let i = 0; i < vis.length; i++) {
             const c = vis[i];
             const cx = xForTs(c.ts);
@@ -842,6 +906,27 @@
         ctx.strokeStyle = "rgba(230,233,239,0.30)";
         ctx.beginPath(); ctx.moveTo(PAD.l, yLast); ctx.lineTo(PAD.l + plotW, yLast); ctx.stroke();
         ctx.setLineDash([]);
+        // Bulle du prix courant (style IQ)
+        try {
+          const lbl = fmtPrice(lastPrice);
+          ctx.font = "bold 12px -apple-system, sans-serif";
+          const tw = ctx.measureText(lbl).width + 16;
+          const lx = Math.min(w - tw - 2, PAD.l + plotW + 3);
+          const ly = Math.min(PAD.t + plotH - 22, Math.max(PAD.t + 2, yLast - 10));
+          ctx.fillStyle = "rgba(35,43,58,0.96)";
+          roundRect(ctx, lx, ly, tw, 20, 6);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(120,135,160,0.6)";
+          ctx.lineWidth = 1;
+          roundRect(ctx, lx, ly, tw, 20, 6);
+          ctx.stroke();
+          ctx.fillStyle = "#e6e9ef";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(lbl, lx + tw / 2, ly + 10);
+          ctx.textAlign = "start";
+          ctx.textBaseline = "alphabetic";
+        } catch (e) { /* ignore */ }
 
         // Direction de la bougie en cours, en bas (BUY / SELL)
         if (useCandles && vis.length) {
@@ -909,8 +994,9 @@
       }
 
       function resetView() {
-        state.view = null; state.follow = false; draw();
+        state.view = null; state.follow = true; draw();
       }
+      window.__fitChart = function () { fitCanvas(); resetView(); };
 
       let drag = null;
       canvas.addEventListener("pointerdown", function (e) {
@@ -1744,6 +1830,10 @@
                 return '<div class="signal" style="display:flex;align-items:center;gap:10px">' + ic +
                   "<span>• <b>" + dir + "</b> — " + d + pr + " · " + (m.expiry || 300) + "s</span></div>";
               }).join("");
+              if (a.disabled && a.disabled.length) {
+                ml.innerHTML += '<div class="sub" style="margin-top:6px;color:#ef4444">Écartées (taux < 55% après 10 trades) : ' +
+                  a.disabled.join(", ") + "</div>";
+              }
             }
           }
         } catch (e) { /* ignore */ }
@@ -2010,10 +2100,10 @@
         const modeLabel = (modeChk && modeChk.value === "real") ? "RÉEL" : "DÉMO";
         el.textContent = "Envoi de l'ordre…";
         const body = { asset: state.asset, direction: direction, amount: amount, confirm: "YES" };
-        const expEl = document.getElementById("order-expiry");
+        const expEl = document.getElementById("trade-expiry");
         if (expEl) {
           const v = parseInt(expEl.value, 10);
-          if (v) body.expiry = v;
+          body.expiry = isNaN(v) ? 0 : v;
         }
         try {
           const res = await fetch("/api/order", {
@@ -2095,9 +2185,72 @@
         try { if (typeof loadServerCandles === "function") loadServerCandles(); } catch (e) { /* ignore */ }
         try { if (typeof loadSignals === "function") loadSignals(); } catch (e) { /* ignore */ }
       }, 3000);
+
+      (function () {
+        let known = null;
+        async function checkVer() {
+          try {
+            const d = await (await fetch("/api/version")).json();
+            if (known === null) { known = d.v; return; }
+            if (d.v !== known) { location.reload(); }
+          } catch (e) { /* ignore */ }
+        }
+        checkVer();
+        setInterval(function () { if (!document.hidden) checkVer(); }, 10000);
+      })();
+
+      function renderAgs(d) {
+        const el = document.getElementById("ags-table");
+        if (!el) return;
+        try {
+          const nm = document.getElementById("ags-asset");
+          if (nm) nm.textContent = d && d.asset ? ("· " + d.asset) : "";
+        } catch (e) { /* ignore */ }
+        if (!d || !d.rows) { el.innerHTML = '<div class="empty">—</div>'; return; }
+        const col = { HAUSSIERE: "#22c55e", BAISSIERE: "#ef4444", NEUTRE: "#9ca3af" };
+        let html = '<table class="tbl"><thead><tr><th>TF</th><th>Direction</th><th>RSI</th><th>Force</th></tr></thead><tbody>';
+        d.rows.forEach(function (r) {
+          html += "<tr><td>" + r.tf + '</td><td style="color:' + (col[r.dir] || "#9ca3af") + ';font-weight:700">' + r.dir + "</td><td>" + (r.rsi == null ? "—" : r.rsi) + "</td><td>" + r.force + "</td></tr>";
+        });
+        html += "</tbody></table>";
+        const g = d.global || {};
+        const sb = (d.signal || {}).bias || "—";
+        const sdir = sb === "BIAS HAUSSIER" ? "HAUSSIERE" : (sb === "BIAS BAISSIER" ? "BAISSIERE" : "NEUTRE");
+        html += '<div class="sub" style="margin-top:6px">Global : <b style="color:' + (col[g.bias] || "#9ca3af") + '">' + (g.bias || "—") + "</b> · " + (g.buy || 0) + "/4 BUY · " + (g.sell || 0) + "/4 SELL</div>";
+        const sigColor = col[sdir] || "#9ca3af";
+        html += '<div class="sub">Convergence : <b>' + (d.convergence || 0) + '/4</b> · Signal : <b style="color:' + sigColor + '">' + sb + '</b> (CLOTURE · AGS)</div>';
+        el.innerHTML = html;
+      }
+      async function pollAgs() {
+        try {
+          const sel = document.getElementById("asset");
+          const a = sel && sel.value ? sel.value : "";
+          const url = "/api/ags-trend" + (a ? ("?asset=" + encodeURIComponent(a)) : "");
+          const d = await (await fetch(url)).json();
+          renderAgs(d);
+        } catch (e) { /* ignore */ }
+      }
+      setInterval(function () { if (!document.hidden) pollAgs(); }, 3000);
+      pollAgs();
+      function updateAgsTiming() {
+        const el = document.getElementById("ags-timing");
+        if (!el) return;
+        const now = Date.now() / 1000;
+        const remain = 300 - (now % 300);
+        if (remain <= 2.5) {
+          el.textContent = "ENTRÉE MAINTENANT (T-2s)";
+          el.style.color = "#22c55e";
+        } else {
+          el.textContent = "Prochaine entrée dans " + Math.ceil(remain - 2) + "s (T-2s avant clôture)";
+          el.style.color = "#f59e0b";
+        }
+      }
+      setInterval(function () { if (!document.hidden) updateAgsTiming(); }, 1000);
+      updateAgsTiming();
       pollEvaluate();
       setInterval(pollEvaluate, 3000);
       pollSimulate();
+      window.__refreshPairsGrid = refreshPairsGrid;
       refreshPairsGrid();
       setInterval(refreshPairsGrid, 4000);
 
@@ -2304,6 +2457,9 @@
               upsertServerCandle(msg.data);
               if (state.mode === "candles") scheduleDraw();
             }
+          } else if (msg.type === "price" && msg.price != null) {
+            setPrice(msg.price, msg.dir || null);
+            scheduleDraw();
           } else if (msg.type === "ping") {
             updateStats(msg.stats);
           }
@@ -2333,12 +2489,13 @@
         }
       });
       window.addEventListener("online", function () { reconnectDelay = 1000; connect(); });
+      setTimeout(function () { try { fitCanvas(); resetView(); } catch (e) { /* ignore */ } }, 500);
 
       function setMode(mode) {
         state.mode = mode;
         document.getElementById("mode-candles").classList.toggle("active", mode === "candles");
         document.getElementById("mode-line").classList.toggle("active", mode === "line");
-        state.view = null; state.follow = false;
+        state.view = null; state.follow = true;
         draw();
       }
 
@@ -2346,7 +2503,7 @@
       document.getElementById("mode-line").addEventListener("click", function () { setMode("line"); });
       document.getElementById("tf").addEventListener("change", function (e) {
         state.tf = parseInt(e.target.value, 10) || 300;
-        state.view = null; state.follow = false;
+        state.view = null; state.follow = true;
         draw();
       });
       function switchAsset(name, syncIQ) {
@@ -2373,10 +2530,10 @@
         switchAsset(e.target.value, true);
       });
 
-      if (window.ResizeObserver) new ResizeObserver(function () { scheduleDraw(); }).observe(wrap);
+      if (window.ResizeObserver) new ResizeObserver(function () { fitCanvas(); scheduleDraw(); }).observe(wrap);
       else window.addEventListener("resize", scheduleDraw);
-      window.addEventListener("resize", scheduleDraw);
-      window.addEventListener("orientationchange", function () { setTimeout(scheduleDraw, 250); });
+      window.addEventListener("resize", function () { fitCanvas(); scheduleDraw(); });
+      window.addEventListener("orientationchange", function () { setTimeout(function () { fitCanvas(); resetView(); }, 250); });
 
       (async function init() {
         try {
@@ -2431,32 +2588,160 @@
         const sb = document.getElementById("sound-test");
         function renderSound() {
           if (!sb) return;
-          sb.textContent = soundOn ? "🔔 Son ON" : "🔕 Son OFF";
-          sb.style.background = soundOn ? "#22c55e" : "#161d2b";
-          sb.style.color = soundOn ? "#04140a" : "#e6e9ef";
-          sb.style.borderColor = soundOn ? "#22c55e" : "#263042";
+          sb.textContent = window.__soundOn ? "🔔 Son ON" : "🔕 Son OFF";
+          sb.style.background = window.__soundOn ? "#22c55e" : "#161d2b";
+          sb.style.color = window.__soundOn ? "#04140a" : "#e6e9ef";
+          sb.style.borderColor = window.__soundOn ? "#22c55e" : "#263042";
           sb.style.fontWeight = "700";
         }
         try {
           const saved = localStorage.getItem("iq_sound");
-          if (saved === "0") soundOn = false;
+          if (saved === "0") window.__soundOn = false;
         } catch (e) { /* ignore */ }
         renderSound();
         if (sb) sb.addEventListener("click", function () {
-          soundOn = !soundOn;
-          try { localStorage.setItem("iq_sound", soundOn ? "1" : "0"); } catch (e) { /* ignore */ }
+          window.__soundOn = !window.__soundOn;
+          try { localStorage.setItem("iq_sound", window.__soundOn ? "1" : "0"); } catch (e) { /* ignore */ }
           renderSound();
-          if (soundOn) {
-            unlockAudio();
-            playBeep(true);
-            setTimeout(function () { playBeep(false); }, 320);
+          if (window.__soundOn) {
+            if (window.__unlockAudio) window.__unlockAudio();
+            if (window.__playBeep) window.__playBeep(true);
+            setTimeout(function () { if (window.__playBeep) window.__playBeep(false); }, 320);
           }
           const t = document.getElementById("refresh-toast");
           if (t) {
-            t.textContent = soundOn ? "Son activé" : "Son coupé";
+            t.textContent = window.__soundOn ? "Son activé" : "Son coupé";
             t.classList.add("show");
             setTimeout(function () { t.classList.remove("show"); }, 1100);
           }
+        });
+        const expSel = document.getElementById("trade-expiry");
+        function renderExpiryLabels() {
+          const sel = document.getElementById("trade-expiry");
+          const v = sel ? parseInt(sel.value, 10) : 300;
+          const lbl = !v ? "Auto" : (v + "s");
+          const b = document.getElementById("btn-buy");
+          const s2 = document.getElementById("btn-sell");
+          if (b) b.textContent = "ACHAT · " + lbl;
+          if (s2) s2.textContent = "VENTE · " + lbl;
+        }
+        async function loadExpiry() {
+          try {
+            const d = await (await fetch("/api/settings/expiry")).json();
+            if (expSel) expSel.value = String(d.expiry === 0 ? 0 : (d.expiry || 300));
+          } catch (e) { /* ignore */ }
+          renderExpiryLabels();
+        }
+        if (expSel) expSel.addEventListener("change", async function () {
+          try {
+            await fetch("/api/settings/expiry", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ expiry: parseInt(expSel.value, 10) }),
+            });
+            renderExpiryLabels();
+            toast("Durée du trade : " + (parseInt(expSel.value, 10) ? expSel.value + "s" : "Auto"));
+          } catch (e) { /* ignore */ }
+        });
+        loadExpiry();
+
+        const agsSel = document.getElementById("ags-expiry");
+        async function loadAgsExpiry() {
+          try {
+            const d = await (await fetch("/api/settings/ags-expiry")).json();
+            if (agsSel) agsSel.value = String(d.expiry || 0);
+          } catch (e) { /* ignore */ }
+        }
+        if (agsSel) agsSel.addEventListener("change", async function () {
+          try {
+            await fetch("/api/settings/ags-expiry", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ expiry: parseInt(agsSel.value, 10) }),
+            });
+            const v = parseInt(agsSel.value, 10);
+            toast("Durée algo AGS : " + (v ? v + "s" : "Auto"));
+          } catch (e) { /* ignore */ }
+        });
+        loadAgsExpiry();
+
+        const agsAutoBtn = document.getElementById("ags-auto-timing");
+        async function renderAgsAuto() {
+          try {
+            const d = await (await fetch("/api/settings/ags-auto-timing")).json();
+            if (!agsAutoBtn) return;
+            agsAutoBtn.textContent = "Timing auto : " + (d.enabled ? "ON" : "OFF");
+            agsAutoBtn.style.background = d.enabled ? "#22c55e" : "#161d2b";
+            agsAutoBtn.style.color = d.enabled ? "#04140a" : "#e6e9ef";
+            agsAutoBtn.style.borderColor = d.enabled ? "#22c55e" : "#263042";
+            agsAutoBtn.style.fontWeight = "700";
+          } catch (e) { /* ignore */ }
+        }
+        if (agsAutoBtn) agsAutoBtn.addEventListener("click", async function () {
+          try {
+            const cur = await (await fetch("/api/settings/ags-auto-timing")).json();
+            const en = !cur.enabled;
+            await fetch("/api/settings/ags-auto-timing", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ enabled: en }),
+            });
+            renderAgsAuto();
+            toast("Timing AGS auto " + (en ? "activé" : "désactivé"));
+          } catch (e) { /* ignore */ }
+        });
+        renderAgsAuto();
+
+        const ab = document.getElementById("methods-analyse");
+        async function renderProposals() {
+          const box = document.getElementById("proposals");
+          if (!box) return;
+          box.innerHTML = "Analyse des marchés…";
+          try {
+            const d = await (await fetch("/api/methods/propose")).json();
+            const ps = d.proposals || [];
+            if (!ps.length) {
+              box.innerHTML = '<div class="empty">Aucune nouvelle méthode rentable détectée.</div>';
+              return;
+            }
+            box.innerHTML = ps.map(function (p) {
+              return '<div class="signal" style="display:flex;justify-content:space-between;gap:8px;align-items:center">' +
+                "<span><b>" + p.name + "</b> · " + p.direction + " · test " + p.test_rate + "% (n=" + p.test_n + ")</span>" +
+                '<button class="adopt" data-name="' + p.name + '" style="padding:4px 10px">Adopter</button></div>';
+            }).join("");
+            box.querySelectorAll(".adopt").forEach(function (b) {
+              b.addEventListener("click", async function () {
+                try {
+                  await fetch("/api/methods/adopt", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: b.dataset.name }),
+                  });
+                  toast("Méthode adoptée : " + b.dataset.name);
+                  if (typeof pollLearnings === "function") pollLearnings();
+                  renderProposals();
+                } catch (e) { /* ignore */ }
+              });
+            });
+          } catch (e) {
+            box.innerHTML = '<div class="empty">Erreur analyse.</div>';
+          }
+        }
+        if (ab) ab.addEventListener("click", renderProposals);
+
+        const cfb = document.getElementById("chart-fit");
+        if (cfb) cfb.addEventListener("click", async function () {
+          try { if (typeof loadServerCandles === "function") await loadServerCandles(); } catch (e) { /* ignore */ }
+          try { if (typeof loadHistory === "function") await loadHistory(); } catch (e) { /* ignore */ }
+          try { if (typeof loadSignals === "function") await loadSignals(); } catch (e) { /* ignore */ }
+          if (window.__fitChart) window.__fitChart();
+          toast("Bougies rechargées + graphique ajusté");
+        });
+
+        const prb = document.getElementById("pairs-refresh");
+        if (prb) prb.addEventListener("click", async function () {
+          try {
+            await fetch("/api/pairs/refresh", { method: "POST" });
+            if (typeof pollLearnings === "function") pollLearnings();
+            if (window.__refreshPairsGrid) window.__refreshPairsGrid();
+            toast("Paires actualisées");
+          } catch (e) { /* ignore */ }
         });
         const a = document.getElementById("refresh-top");
         if (a) a.addEventListener("click", refreshAll);

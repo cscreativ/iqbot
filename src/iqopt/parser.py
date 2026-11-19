@@ -81,6 +81,7 @@ class AssetInfo:
     type: Optional[str] = None
     precision: Optional[int] = None
     suspended: bool = False
+    schedule: Optional[list] = None
 
 
 @dataclass
@@ -356,5 +357,6 @@ class FrameParser:
                     type=item.get("active_type"),
                     precision=item.get("precision"),
                     suspended=bool(item.get("is_suspended")),
+                    schedule=item.get("schedule"),
                 )
             )

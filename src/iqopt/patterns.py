@@ -554,6 +554,80 @@ def detect_reversal3(bars: Sequence[Bar], cfg: PatternConfig) -> List[Hit]:
     return [Hit("r1", BUY, 0.6, 4, "3 rouges + engulfing verte -> BUY")]
 
 
+def _rsi14(closes: Sequence[float]) -> float:
+    n = 14
+    if len(closes) < n + 1:
+        return 50.0
+    g = l = 0.0
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gg = d if d > 0 else 0.0
+        ll = -d if d < 0 else 0.0
+        if i <= n:
+            g += gg
+            l += ll
+        else:
+            g = g * (n - 1) / n + gg
+            l = l * (n - 1) / n + ll
+    al = l / n
+    return 100 - 100 / (1 + ((g / n) / al if al else 1e9))
+
+
+def detect_red_upper_buy(bars: Sequence[Bar], cfg: PatternConfig) -> List[Hit]:
+    """Rouge a longue meche haute (corps moyen) + RSI>50 -> BUY (~57-60% OOS)."""
+    if len(bars) < 20:
+        return []
+    b = bars[-1]
+    if not b.bearish or b.range <= 0:
+        return []
+    bp = b.body / b.range
+    if not (0.35 <= bp <= 1.0):
+        return []
+    if b.upper / b.range < 0.45:
+        return []
+    if b.lower / b.range > 0.20:
+        return []
+    if _rsi14([x.close for x in bars]) <= 50:
+        return []
+    return [
+        Hit("r2", BUY, 0.6, 1, "rouge longue meche haute + RSI>50 -> BUY")
+    ]
+
+
+def _ema(closes: Sequence[float], n: int) -> float:
+    if not closes:
+        return 0.0
+    k = 2.0 / (n + 1)
+    e = closes[0]
+    for v in closes[1:]:
+        e = v * k + e * (1 - k)
+    return e
+
+
+def detect_green_upper_pullback_buy(bars: Sequence[Bar], cfg: PatternConfig) -> List[Hit]:
+    """Verte a longue meche haute, tendance haussiere (EMA20>EMA50), RSI<50 -> BUY.
+    Valide hors echantillon ~59-61%, session Londres/NY exigee cote bot.
+    """
+    if len(bars) < 50:
+        return []
+    b = bars[-1]
+    if not b.bullish or b.range <= 0:
+        return []
+    bp = b.body / b.range
+    if not (0.35 <= bp <= 1.0):
+        return []
+    if b.upper / b.range < 0.35:
+        return []
+    if b.lower / b.range > 0.20:
+        return []
+    closes = [x.close for x in bars]
+    if _ema(closes, 20) <= _ema(closes, 50):
+        return []
+    if _rsi14(closes) >= 50:
+        return []
+    return [Hit("r3", BUY, 0.6, 1, "verte longue meche haute + uptrend + RSI<50 -> BUY")]
+
+
 def detect_discovered(bars: Sequence[Bar], cfg: PatternConfig) -> List[Hit]:
     if len(bars) < 2:
         return []
@@ -599,6 +673,8 @@ def detect(bars: Sequence[Bar], cfg: Optional[PatternConfig] = None) -> List[Hit
     hits += detect_discovered(normalized, cfg)
     hits += detect_triple_reversal(normalized, cfg)
     hits += detect_reversal3(normalized, cfg)
+    hits += detect_red_upper_buy(normalized, cfg)
+    hits += detect_green_upper_pullback_buy(normalized, cfg)
     hits += detect_stars(normalized, cfg)
     hits += detect_triple(normalized, cfg)
     return hits

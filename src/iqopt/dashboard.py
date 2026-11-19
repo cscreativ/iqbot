@@ -72,6 +72,18 @@ class AIConfigRequest(BaseModel):
     api_key: Optional[str] = None
 
 
+class ExpiryRequest(BaseModel):
+    expiry: Optional[int] = None
+
+
+class ToggleRequest(BaseModel):
+    enabled: Optional[bool] = None
+
+
+class AdoptRequest(BaseModel):
+    name: Optional[str] = None
+
+
 class OrderRequest(BaseModel):
     asset: Optional[str] = None
     direction: str
@@ -301,6 +313,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             _stats_cache["t"] = now
         return _stats_cache["v"]
 
+    @app.get("/api/version")
+    def version():
+        try:
+            v = str(int(os.path.getmtime(str(static_dir / "index.html"))))
+        except Exception:  # noqa: BLE001
+            v = "1"
+        return {"v": v}
+
     @app.get("/api/status")
     def status():
         # Suivre l'actif qui recoit des ticks EN CE MOMENT (temps reel),
@@ -337,6 +357,102 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     async def candles(asset: Optional[str] = None, timeframe: int = 60, limit: int = 300):
         asset = (asset or settings.asset).upper()
         return {"asset": asset, "candles": db.get_candles(asset, timeframe, limit)}
+
+    @app.get("/api/ags-trend")
+    def ags_trend(asset: Optional[str] = None):
+        name = (
+            asset
+            or db.latest_tick_asset()
+            or db.top_tick_asset()
+            or settings.asset
+            or ""
+        ).upper()
+        try:
+            cs = db.get_candles(name, 300, 3000)
+        except Exception:  # noqa: BLE001
+            cs = []
+
+        def aggregate(tf: int):
+            buckets = {}
+            for c in cs:
+                try:
+                    ts = float(c["ts"])
+                    o = float(c["open"])
+                    h = float(c["high"])
+                    l = float(c["low"])
+                    cl = float(c["close"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                b = int(ts // tf) * tf
+                d = buckets.get(b)
+                if d is None:
+                    buckets[b] = {"open": o, "high": h, "low": l, "close": cl}
+                else:
+                    d["high"] = max(d["high"], h)
+                    d["low"] = min(d["low"], l)
+                    d["close"] = cl
+            return [buckets[k] for k in sorted(buckets)]
+
+        def ema_last(vals, n):
+            if not vals:
+                return 0.0
+            k = 2.0 / (n + 1)
+            e = vals[0]
+            for v in vals[1:]:
+                e = v * k + e * (1 - k)
+            return e
+
+        def rsi_last(closes, n=14):
+            if len(closes) < n + 1:
+                return 50.0
+            g = l = 0.0
+            for i in range(1, len(closes)):
+                d = closes[i] - closes[i - 1]
+                gg = d if d > 0 else 0.0
+                ll = -d if d < 0 else 0.0
+                if i <= n:
+                    g += gg
+                    l += ll
+                else:
+                    g = g * (n - 1) / n + gg
+                    l = l * (n - 1) / n + ll
+            al = l / n
+            return 100 - 100 / (1 + ((g / n) / al if al else 1e9))
+
+        rows = []
+        for label, tf in (("M5", 300), ("M15", 900), ("H1", 3600), ("D1", 86400)):
+            arr = aggregate(tf)
+            if len(arr) < 20:
+                rows.append({"tf": label, "dir": "NEUTRE", "rsi": None, "force": "FAIBLE"})
+                continue
+            closes = [x["close"] for x in arr]
+            r = rsi_last(closes)
+            e = ema_last(closes, 20)
+            last = closes[-1]
+            if last > e and r >= 50:
+                d = "HAUSSIERE"
+            elif last < e and r <= 50:
+                d = "BAISSIERE"
+            else:
+                d = "NEUTRE"
+            force = "FORTE" if abs(r - 50) >= 10 else ("MOYENNE" if abs(r - 50) >= 5 else "FAIBLE")
+            rows.append({"tf": label, "dir": d, "rsi": round(r, 1), "force": force})
+        bull = sum(1 for x in rows if x["dir"] == "HAUSSIERE")
+        bear = sum(1 for x in rows if x["dir"] == "BAISSIERE")
+        bias = "HAUSSIERE" if bull > bear else ("BAISSIERE" if bear > bull else "NEUTRE")
+        conv = max(bull, bear)
+        sig = (
+            "BIAS HAUSSIER"
+            if bias == "HAUSSIERE"
+            else ("BIAS BAISSIER" if bias == "BAISSIERE" else "NEUTRE")
+        )
+        return {
+            "asset": name,
+            "rows": rows,
+            "global": {"bias": bias, "buy": bull, "sell": bear},
+            "convergence": conv,
+            "signal": {"bias": sig, "close": "CLOTURE", "ags": "AGS"},
+        }
 
     @app.get("/api/assets")
     def assets_catalog():
@@ -376,6 +492,12 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="confirmation requise (confirm=YES)")
         asset = (req.asset or settings.asset).upper()
         req_expiry = int(req.expiry) if req.expiry else None
+        if req_expiry is None:
+            try:
+                _te = int(db.get_meta("trade_expiry") or 0)
+                req_expiry = _te if _te > 0 else 300
+            except (TypeError, ValueError):
+                req_expiry = 300
         order_id = db.insert_order(
             asset, direction, amount, "queued", "depuis dashboard", req_expiry
         )
@@ -555,6 +677,55 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             _pick(data, q, "token", "secret") or "",
         )
 
+    @app.get("/api/settings/expiry")
+    def get_expiry():
+        try:
+            v = int(db.get_meta("trade_expiry") or 300)
+        except (TypeError, ValueError):
+            v = 300
+        return {"expiry": v}
+
+    @app.post("/api/settings/expiry")
+    def set_expiry(req: ExpiryRequest):
+        try:
+            v = int(req.expiry or 0)
+        except (TypeError, ValueError):
+            v = 0
+        allowed = {0, 30, 45, 60, 120, 200, 300}
+        if v not in allowed:
+            raise HTTPException(status_code=400, detail="duree invalide (30/60/120/200/300)")
+        db.set_meta("trade_expiry", str(v))
+        return {"expiry": v}
+
+    @app.get("/api/settings/ags-expiry")
+    def get_ags_expiry():
+        try:
+            v = int(db.get_meta("ags_contra_expiry") or 0)
+        except (TypeError, ValueError):
+            v = 0
+        return {"expiry": v}
+
+    @app.post("/api/settings/ags-expiry")
+    def set_ags_expiry(req: ExpiryRequest):
+        try:
+            v = int(req.expiry or 0)
+        except (TypeError, ValueError):
+            v = 0
+        allowed = {0, 30, 45, 60, 120, 200, 300}
+        if v not in allowed:
+            raise HTTPException(status_code=400, detail="duree invalide")
+        db.set_meta("ags_contra_expiry", str(v))
+        return {"expiry": v}
+
+    @app.get("/api/settings/ags-auto-timing")
+    def get_ags_auto_timing():
+        return {"enabled": (db.get_meta("ags_auto_timing") or "1") == "1"}
+
+    @app.post("/api/settings/ags-auto-timing")
+    def set_ags_auto_timing(req: ToggleRequest):
+        db.set_meta("ags_auto_timing", "1" if req.enabled else "0")
+        return {"enabled": bool(req.enabled)}
+
     @app.get("/api/settings/amount")
     def get_amount():
         try:
@@ -607,6 +778,171 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.get("/api/learnings")
     def learnings(limit: int = 30):
         return {"learnings": db.get_learnings(limit)}
+
+    @app.post("/api/pairs/refresh")
+    def refresh_pairs():
+        """Recalcule la liste des paires actives (ouvertes, non suspendues)."""
+        now_ts = time.time()
+        try:
+            max_pairs = int(os.getenv("IQ_AUTO_MAX_PAIRS", "60") or 60)
+        except ValueError:
+            max_pairs = 60
+        out = []
+        try:
+            rows = db.get_assets()
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            nm = str(r.get("name") or "")
+            if not nm:
+                continue
+            if "marginal" in str(r.get("type") or "").lower():
+                continue
+            u = nm.upper()
+            if not (u.endswith("-OTC") or u.endswith("-OP")):
+                continue
+            if r.get("suspended"):
+                continue
+            sch = r.get("schedule")
+            if sch:
+                try:
+                    arr = json.loads(sch)
+                except Exception:  # noqa: BLE001
+                    arr = []
+                ok = False
+                for w in arr if isinstance(arr, list) else []:
+                    if not isinstance(w, dict):
+                        continue
+                    try:
+                        if float(w.get("open", 0)) <= now_ts <= float(w.get("close", 0)):
+                            ok = True
+                            break
+                    except (TypeError, ValueError):
+                        continue
+                if not ok:
+                    continue
+            out.append(nm)
+        out = out[:max_pairs]
+        db.set_meta("auto_monitored", ",".join(out))
+        db.set_meta("pairs_refresh_ts", str(time.time()))
+        return {"pairs": out, "count": len(out)}
+
+    @app.get("/api/methods/propose")
+    def propose_methods():
+        """Analyse les marches (train 14j / test 7j) et propose des methodes rentables."""
+        from .patterns import DISCOVERED_PATTERNS, _candle_code, to_bars
+
+        now_ts = time.time()
+        test_start = now_ts - 7 * 86400
+        start = now_ts - 21 * 86400
+        by_code = {}
+        dirs = {}
+        for name, (t1, t2), d, _desc in DISCOVERED_PATTERNS:
+            by_code.setdefault((t1, t2), []).append((name, d))
+            dirs[name] = d
+        for k in by_code:
+            by_code[k].sort()
+        stat = {}
+        try:
+            assets = db.get_recent_candle_assets(start)[:150]
+        except Exception:  # noqa: BLE001
+            assets = []
+        for a in assets:
+            try:
+                cs = db.get_candles(a, 300, 2400)
+            except Exception:  # noqa: BLE001
+                continue
+            cs = [c for c in cs if float(c.get("ts") or 0) >= start]
+            if len(cs) < 30:
+                continue
+            try:
+                bars = to_bars(cs)
+            except Exception:  # noqa: BLE001
+                continue
+            codes = [_candle_code(b) for b in bars]
+            cl = [float(c["close"]) for c in cs]
+            ts = [float(c["ts"]) for c in cs]
+            for i in range(1, len(cs) - 1):
+                key = (codes[i - 1], codes[i])
+                if key not in by_code:
+                    continue
+                name, d = by_code[key][0]
+                ref = cl[i]
+                nxt = cl[i + 1]
+                if nxt == ref:
+                    continue
+                win = (nxt < ref) if d == "SELL" else (nxt > ref)
+                st = stat.setdefault(name, {"tn": 0, "tw": 0, "en": 0, "ew": 0})
+                if ts[i] >= test_start:
+                    st["en"] += 1
+                    st["ew"] += 1 if win else 0
+                else:
+                    st["tn"] += 1
+                    st["tw"] += 1 if win else 0
+        active = set()
+        try:
+            for m in json.loads(db.get_meta("active_methods") or "[]"):
+                active.add(str(m.get("name")))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            active |= set(json.loads(db.get_meta("adopted_methods") or "{}").keys())
+        except Exception:  # noqa: BLE001
+            pass
+        out = []
+        for name, st in stat.items():
+            if name in active:
+                continue
+            tn, tw, en, ew = st["tn"], st["tw"], st["en"], st["ew"]
+            if tn < 25 or en < 20:
+                continue
+            tr_rate = 100.0 * tw / tn
+            te_rate = 100.0 * ew / en
+            if tr_rate < 55 or te_rate < 58:
+                continue
+            out.append(
+                {
+                    "name": name,
+                    "direction": dirs.get(name, "BUY"),
+                    "train_rate": round(tr_rate, 1),
+                    "train_n": tn,
+                    "test_rate": round(te_rate, 1),
+                    "test_n": en,
+                }
+            )
+        out.sort(key=lambda x: (-x["test_rate"], -x["test_n"]))
+        return {"proposals": out[:8]}
+
+    @app.post("/api/methods/adopt")
+    def adopt_method(req: AdoptRequest):
+        name = str(req.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="nom manquant")
+        from .patterns import DISCOVERED_PATTERNS
+
+        d = None
+        for n, (_a, _b), dr, _c in DISCOVERED_PATTERNS:
+            if n == name:
+                d = dr
+                break
+        if d is None:
+            raise HTTPException(status_code=404, detail="methode inconnue")
+        try:
+            adopted = json.loads(db.get_meta("adopted_methods") or "{}")
+        except Exception:  # noqa: BLE001
+            adopted = {}
+        adopted[name] = d
+        db.set_meta("adopted_methods", json.dumps(adopted))
+        try:
+            ms = json.loads(db.get_meta("active_methods") or "[]")
+            if not any(str(m.get("name")) == name for m in ms):
+                ms.append(
+                    {"name": name, "direction": d, "expiry": 300, "desc": "", "pairs": []}
+                )
+                db.set_meta("active_methods", json.dumps(ms))
+        except Exception:  # noqa: BLE001
+            pass
+        return {"adopted": adopted}
 
     @app.get("/api/methods")
     def methods():
@@ -890,6 +1226,41 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             suspended = set()
         if suspended:
             monitored = [a for a in monitored if str(a).upper() not in suspended]
+        # Ne garder que les paires OUVERTES a l'instant (horaires IQ).
+        try:
+            rows = db.get_assets()
+        except Exception:  # noqa: BLE001
+            rows = []
+        now_ts = time.time()
+        open_names = set()
+        for r in rows:
+            nm = str(r.get("name") or "").upper()
+            if not nm or r.get("suspended"):
+                continue
+            sch = r.get("schedule")
+            if not sch:
+                open_names.add(nm)
+                continue
+            try:
+                arr = json.loads(sch)
+            except Exception:  # noqa: BLE001
+                open_names.add(nm)
+                continue
+            ok = False
+            for w in arr if isinstance(arr, list) else []:
+                if not isinstance(w, dict):
+                    continue
+                try:
+                    if float(w.get("open", 0)) <= now_ts <= float(w.get("close", 0)):
+                        ok = True
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if ok:
+                open_names.add(nm)
+        if open_names:
+            monitored = [a for a in monitored if str(a).upper() in open_names]
+
         try:
             _scan = json.loads(db.get_meta("auto_scan") or "[]")
         except Exception:  # noqa: BLE001
@@ -905,6 +1276,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             "last_check_age": age("auto_last_check"),
             "last_trade_age": age("auto_last_trade_ts"),
             "monitored": monitored,
+            "disabled": [x for x in (db.get_meta("disabled_methods") or "").split(",") if x],
             "last_signal": db.get_meta("auto_last_signal") or None,
             "signal": db.get_meta("auto_signal") or None,
             "signal_age": age("auto_signal_ts"),
@@ -1293,6 +1665,13 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                     current_price = db.price_at(asset, time.time()) if asset else None
                 except Exception:  # noqa: BLE001
                     current_price = None
+                if current_price is None and asset:
+                    try:
+                        _cs = db.get_candles(asset, 300, 1)
+                        if _cs:
+                            current_price = float(_cs[-1]["close"])
+                    except Exception:  # noqa: BLE001
+                        pass
                 if current_price is not None and entry is not None:
                     if direction == "BUY":
                         live = "WIN" if current_price > entry else ("LOSS" if current_price < entry else "EVEN")
@@ -1587,6 +1966,17 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                     if cur != last_candle:
                         await websocket.send_json({"type": "candle", "timeframe": 300, "data": cur})
                         last_candle = cur
+                    try:
+                        await websocket.send_json(
+                            {
+                                "type": "price",
+                                "asset": asset,
+                                "price": float(cur["close"]),
+                                "dir": "up" if float(cur["close"]) >= float(cur["open"]) else "down",
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 await websocket.send_json({"type": "ping", "stats": _stats_cached()})
                 await _sleep(0.5)
         except WebSocketDisconnect:

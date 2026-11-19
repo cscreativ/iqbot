@@ -48,6 +48,15 @@ JS_SEND = """
 """
 
 
+
+# Methodes actives par defaut (utilisees si aucune variable d'environnement).
+DEFAULT_ACTIVE = [
+    ("d5", "BUY"), ("q68", "BUY"), ("e7", "BUY"), ("q18", "SELL"),
+    ("d8", "SELL"), ("q82", "SELL"), ("q52", "SELL"), ("q36", "SELL"),
+    ("r2", "BUY"), ("r3", "BUY"),
+]
+
+
 _NAMED_METHOD_DESC = {
     "bullish_inside": "2 bougies vertes, la 2ᵉ plus petite avec mèche BASSE longue",
     "bullish_big_lower": "rouge + plus grande verte qui englobe son corps",
@@ -108,6 +117,7 @@ class Collector:
         self.precisions: dict[str, int] = {}
         self.asset_types: dict[str, str] = {}
         self.asset_suspended: dict[int, bool] = {}
+        self.asset_schedule: dict[int, list] = {}
         for row in self.db.get_assets():
             name = str(row.get("name") or "").upper()
             if not name:
@@ -120,6 +130,9 @@ class Collector:
                 self.asset_types[name] = str(row.get("type"))
             try:
                 self.asset_suspended[int(row.get("active_id"))] = bool(row.get("suspended"))
+                sch = row.get("schedule")
+                if sch:
+                    self.asset_schedule[int(row.get("active_id"))] = json.loads(sch)
             except (TypeError, ValueError):
                 pass
             prec = row.get("precision")
@@ -163,6 +176,11 @@ class Collector:
         self.order_results: dict[str, dict] = {}
         # Soldes par type : 1 = reel, 4 = demo (convention IQ).
         self.balance_ids: dict[int, int] = {}
+        try:
+            for _b in json.loads(self.db.get_meta("balances") or "[]"):
+                self.balance_ids[int(_b.get("type"))] = int(_b.get("id"))
+        except Exception:  # noqa: BLE001
+            pass
 
         # Correlation request_id -> {active_id, size} pour attribuer l'historique.
         self.request_ctx: dict[str, dict] = {}
@@ -219,6 +237,7 @@ class Collector:
                 await self._wait_until_live(context, page)
                 order_task = asyncio.create_task(self._order_worker(page))
                 auto_task = asyncio.create_task(self._auto_loop(page))
+                pairs_task = asyncio.create_task(self._pairs_watch_loop(page))
                 ags_task = asyncio.create_task(self._ags_loop(page))
                 preclose_task = asyncio.create_task(self._preclose_loop(page))
                 counter_task = asyncio.create_task(self._counter_loop(page))
@@ -364,9 +383,13 @@ class Collector:
             self.db.update_order_status(oid, "failed", f"active_id inconnu pour {asset}")
             return
         recent = self.db.get_recent_ticks(asset, 1)
-        if not recent or (time.time() - float(recent[-1]["ts"])) > 180:
-            self.db.update_order_status(oid, "failed", f"pas de flux recent pour {asset}")
-            return
+        stale = (not recent) or (time.time() - float(recent[-1]["ts"])) > 180
+        if stale:
+            # Repli : utiliser une bougie recente comme source de flux.
+            cs = self.db.get_candles(asset, 300, 1) or self.db.get_candles(asset, 60, 1)
+            if not cs:
+                self.db.update_order_status(oid, "failed", f"pas de flux recent pour {asset}")
+                return
         if not self.order_template:
             self.db.update_order_status(
                 oid,
@@ -384,6 +407,9 @@ class Collector:
             return
         try:
             sent = await self._send_ws(page, json.dumps(payload, separators=(",", ":")))
+            if not sent:
+                await asyncio.sleep(0.4)
+                sent = await self._send_ws(page, json.dumps(payload, separators=(",", ":")))
         except Exception as exc:  # noqa: BLE001
             self.db.update_order_status(oid, "failed", f"envoi ws echoue: {exc}")
             return
@@ -414,13 +440,37 @@ class Collector:
                 f"position #{result.get('option_id')} {result.get('direction')} "
                 f"exp={payload['msg']['body'].get('expiration_size')}s",
             )
+            try:
+                _pid = int(result["option_id"])
+                if self.db.get_sample(_pid) is None:
+                    _exp = int(payload["msg"]["body"].get("expiration_size") or 300)
+                    _note = str(order.get("note") or "")
+                    _pat = "manuel"
+                    if "pattern=" in _note:
+                        _t = _note.split("pattern=", 1)[1].split(" ", 1)[0]
+                        if _t and _t[0].isalpha() and _t[1:].isdigit():
+                            _pat = _t
+                    self.db.add_sample(
+                        time.time(), _pid, asset,
+                        "CALL" if direction == "BUY" else "PUT",
+                        amount, entry, time.time() + _exp, _exp,
+                        _pat, "", time.localtime().tm_hour, "dashboard",
+                    )
+            except Exception:  # noqa: BLE001
+                pass
             print(
                 f"[orders] #{oid} {direction} {asset} {amount} -> FILLED #{result.get('option_id')}",
                 flush=True,
             )
-        elif result and result.get("success") is False:
-            self.db.update_order_status(oid, "failed", "rejete par IQ")
-            print(f"[orders] #{oid} -> rejete par IQ", flush=True)
+        elif result and (result.get("success") is False or result.get("error")):
+            reason = str(result.get("error") or "rejete par IQ")[:140]
+            self.db.update_order_status(oid, "failed", reason)
+            try:
+                self.db.set_meta("auto_last_error", f"{asset} — {reason}")
+                self.db.set_meta("auto_last_error_ts", str(time.time()))
+            except Exception:  # noqa: BLE001
+                pass
+            print(f"[orders] #{oid} -> refuse: {reason}", flush=True)
         else:
             self.db.update_order_status(oid, "sent", "envoye (confirmation non recue)")
             print(f"[orders] #{oid} {direction} {asset} {amount} -> envoye (sans confirmation)", flush=True)
@@ -451,7 +501,15 @@ class Collector:
         body["direction"] = "call" if direction == "BUY" else "put"
         body["price"] = float(amount)
         body["value"] = int(round(price * (10 ** precision)))
+        body["expiration_size"] = int(expiration)
         body["expired"] = int(time.time()) + expiration
+        # Type d'option selon la duree : blitz <=60s, turbo <=300s, sinon binaire.
+        if expiration <= 60:
+            body["option_type_id"] = 12
+        elif expiration <= 300:
+            body["option_type_id"] = 7
+        else:
+            body["option_type_id"] = 3
         body.setdefault("refund_value", 0)
         # Choix du compte : 1 = reel, 4 = demo. Le mode demo est force par defaut.
         mode = (self.db.get_meta("order_account") or "demo").lower()
@@ -718,10 +776,16 @@ class Collector:
 
     def _store_frame(self, frame) -> None:
         for asset in frame.assets:
+            _sched = getattr(asset, "schedule", None)
             self.db.upsert_asset(
                 asset.active_id, asset.name, asset.type, asset.precision,
                 1 if getattr(asset, "suspended", False) else 0,
+                json.dumps(_sched) if _sched else None,
             )
+            try:
+                self.asset_schedule[int(asset.active_id)] = _sched or []
+            except (TypeError, ValueError):
+                pass
             self.asset_map[asset.active_id] = asset.name
             self.asset_suspended[int(asset.active_id)] = bool(getattr(asset, "suspended", False))
             self.stats["assets"] = self.stats.get("assets", 0) + 1
@@ -762,6 +826,144 @@ class Collector:
             )
         except Exception:  # noqa: BLE001
             pass
+
+    def _ags_counts(self, asset: str):
+        """Comptes multi-timeframe facon AGS TREND PRO -> (bias, bull, bear)."""
+        try:
+            cs = self.db.get_candles(asset, 300, 3000)
+        except Exception:  # noqa: BLE001
+            cs = []
+
+        def agg(tf):
+            b = {}
+            for c in cs:
+                try:
+                    ts = float(c["ts"])
+                    o = float(c["open"])
+                    h = float(c["high"])
+                    l = float(c["low"])
+                    cl = float(c["close"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                k = int(ts // tf) * tf
+                d = b.get(k)
+                if d is None:
+                    b[k] = {"close": cl}
+                else:
+                    d["close"] = cl
+            return [b[k] for k in sorted(b)]
+
+        def ema_last(vals, n):
+            k = 2.0 / (n + 1)
+            e = vals[0]
+            for v in vals[1:]:
+                e = v * k + e * (1 - k)
+            return e
+
+        def rsi_last(cl, n=14):
+            g = l = 0.0
+            for i in range(1, len(cl)):
+                d = cl[i] - cl[i - 1]
+                gg = d if d > 0 else 0.0
+                ll = -d if d < 0 else 0.0
+                if i <= n:
+                    g += gg
+                    l += ll
+                else:
+                    g = g * (n - 1) / n + gg
+                    l = l * (n - 1) / n + ll
+            al = l / n
+            return 100 - 100 / (1 + ((g / n) / al if al else 1e9))
+
+        bull = bear = 0
+        max_dist = 0.0
+        for tf in (300, 900, 3600):
+            arr = agg(tf)
+            if len(arr) < 20:
+                continue
+            cl = [x["close"] for x in arr]
+            r = rsi_last(cl)
+            e = ema_last(cl, 20)
+            last = cl[-1]
+            if last > e and r >= 50:
+                bull += 1
+            elif last < e and r <= 50:
+                bear += 1
+            try:
+                max_dist = max(max_dist, abs(float(r) - 50.0))
+            except (TypeError, ValueError):
+                pass
+        force = "FORTE" if max_dist >= 10 else ("MOYENNE" if max_dist >= 5 else "FAIBLE")
+        bias = "HAUSSIERE" if bull > bear else ("BAISSIERE" if bear > bull else "NEUTRE")
+        return bias, bull, bear, force
+
+    def _ags_bias(self, asset: str):
+        bias, bull, bear, _force = self._ags_counts(asset)
+        return bias, max(bull, bear)
+
+    async def _pairs_watch_loop(self, page) -> None:
+        """Abonne rapidement les nouvelles paires demandees via le bouton Paires."""
+        seen = 0.0
+        while True:
+            try:
+                try:
+                    ts = float(self.db.get_meta("pairs_refresh_ts") or 0)
+                except (TypeError, ValueError):
+                    ts = 0.0
+                if ts > seen:
+                    seen = ts
+                    try:
+                        max_pairs = int(os.getenv("IQ_AUTO_MAX_PAIRS", "60") or 60)
+                    except ValueError:
+                        max_pairs = 60
+                    now_ts = time.time()
+                    pool = []
+                    for n in self.asset_types:
+                        if not is_tradable(n):
+                            continue
+                        u = n.upper()
+                        if not (u.endswith("-OTC") or u.endswith("-OP")):
+                            continue
+                        aid = self.asset_ids.get(u)
+                        if aid is None or self.asset_suspended.get(int(aid), False):
+                            continue
+                        sched = self.asset_schedule.get(int(aid))
+                        if sched:
+                            ok = False
+                            for w in sched:
+                                try:
+                                    if float(w.get("open", 0)) <= now_ts <= float(w.get("close", 0)):
+                                        ok = True
+                                        break
+                                except (TypeError, ValueError):
+                                    continue
+                            if not ok:
+                                continue
+                        pool.append(n)
+                    pool = pool[:max_pairs]
+                    self.db.set_meta("auto_monitored", ",".join(pool))
+                    tf = int(os.getenv("IQ_TF", "300") or 300)
+                    for n in pool:
+                        aid = self.asset_ids.get(n.upper())
+                        if aid is None:
+                            continue
+                        key = (int(aid), tf)
+                        if key in self.auto_subscribed_tf:
+                            continue
+                        sub = {
+                            "name": "subscribeMessage",
+                            "request_id": "pair" + str(int(time.time() * 1000)),
+                            "msg": {
+                                "name": "candle-generated",
+                                "params": {"routingFilters": {"active_id": int(aid), "size": tf}},
+                            },
+                        }
+                        await self._send_ws(page, json.dumps(sub))
+                        self.auto_subscribed_tf.add(key)
+                        self.auto_sub_at[int(aid)] = time.time()
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(5)
 
     def _publish_active_methods(self, only_if_empty: bool = False) -> None:
         """Publie la liste des methodes pour le dashboard, sans attendre d'avoir appris
@@ -915,128 +1117,13 @@ class Collector:
                 self.ags_seen = set(list(self.ags_seen)[-400:])
 
             try:
-                payload = self._build_auto_message(direction, asset, amount, expiry)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[ags] build {asset}: {exc}", flush=True)
-                continue
-            sent = await self._send_ws(page, json.dumps(payload))
-            try:
+                payload = self._build_auto_message(direction, asset, trade_amount, cfg.expiry)
+                await self._send_ws(page, json.dumps(payload))
                 self.db.insert_order(
-                    asset, direction, amount, "auto", f"AGS exp={expiry}s ws={sent}"
+                    asset, direction, trade_amount, "auto", f"pattern=ags exp={cfg.expiry}s"
                 )
             except Exception:  # noqa: BLE001
                 pass
-            print(f"[ags] {direction} {asset} {amount}$ exp={expiry}s sent={sent}", flush=True)
-            try:
-                self.db.set_meta("auto_last_signal", f"AGS {direction} {asset} {amount}$")
-                self.db.set_meta("auto_last_trade_ts", str(time.time()))
-            except Exception:  # noqa: BLE001
-                pass
-
-    async def _preclose_loop(self, page) -> None:
-        print("[preclose] boucle pre-cloture prete (T-5s)", flush=True)
-        while True:
-            try:
-                if (self.db.get_meta("learn_auto") or "1") == "1":
-                    await self._preclose_step(page)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[preclose] erreur: {exc}", flush=True)
-            await asyncio.sleep(1.5)
-
-    async def _preclose_step(self, page) -> None:
-        if os.getenv("IQ_METHODS_ONLY", "0") == "1":
-            return  # mode methodes seules : la direction de bougie n'est pas une methode
-        if os.getenv("IQ_PRECLOSE_ONLY", "1") != "1":
-            return
-        mon = [a for a in (self.db.get_meta("auto_monitored") or "").split(",") if a]
-        if not mon:
-            return
-        try:
-            amount = float(self.db.get_meta("auto_amount") or 0) or 1.0
-        except (TypeError, ValueError):
-            amount = 1.0
-        try:
-            expiry = int(os.getenv("IQ_PRECLOSE_EXPIRY", "30") or 30)
-        except ValueError:
-            expiry = 30
-        try:
-            lead = float(os.getenv("IQ_PRECLOSE_SEC", "5") or 5)
-        except ValueError:
-            lead = 5.0
-
-        now = time.time()
-        for asset in mon:
-            aid = self.asset_ids.get(asset.upper())
-            if aid is None:
-                continue
-            if "marginal" in str(self.asset_types.get(asset.upper()) or "").lower():
-                continue
-            if aid not in self.auto_subscribed:
-                sub = {
-                    "name": "subscribeMessage",
-                    "request_id": "pre" + str(int(time.time() * 1000)),
-                    "msg": {
-                        "name": "candle-generated",
-                        "params": {"routingFilters": {"active_id": int(aid), "size": 300}},
-                    },
-                }
-                await self._send_ws(page, json.dumps(sub))
-                self.auto_subscribed.add(int(aid))
-            candles = self.db.get_candles(asset, 300, 4)
-            if len(candles) < 2:
-                continue
-            forming = candles[-1]
-            try:
-                ts = float(forming["ts"])
-                op = float(forming["open"])
-                cl = float(forming["close"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            remaining = (ts + 300) - now
-            if remaining <= 0 or remaining > lead:
-                continue
-            key = (asset, int(ts))
-            if key in self.preclose_seen:
-                continue
-            self.preclose_seen.add(key)
-            if len(self.preclose_seen) > 1200:
-                self.preclose_seen = set(list(self.preclose_seen)[-600:])
-
-            direction = "BUY" if cl >= op else "SELL"
-            trade_amount = amount if amount >= 1 else 1.0
-            try:
-                payload = self._build_auto_message(direction, asset, trade_amount, expiry)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[preclose] build {asset}: {exc}", flush=True)
-                continue
-            sent = await self._send_ws(page, json.dumps(payload))
-            try:
-                self.db.insert_order(
-                    asset, direction, trade_amount, "auto", f"preclose exp={expiry}s ws={sent}"
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            # Suivi pour le contre-trade a T-4s si le trade devient perdant.
-            try:
-                tks = self.db.get_recent_ticks(asset, 1)
-                entry_px = float(tks[-1]["price"]) if tks else None
-            except Exception:  # noqa: BLE001
-                entry_px = None
-            self.open_trades.append(
-                {
-                    "asset": asset,
-                    "direction": direction,
-                    "amount": trade_amount,
-                    "expiry_ts": time.time() + expiry,
-                    "entry": entry_px,
-                    "handled": False,
-                }
-            )
-            print(
-                f"[preclose] {direction} {asset} {trade_amount}$ exp={expiry}s "
-                f"T-{remaining:.0f}s sent={sent}",
-                flush=True,
-            )
             try:
                 self.db.set_meta("auto_last_signal", f"PRE {direction} {asset} {trade_amount}$")
                 self.db.set_meta("auto_last_trade_ts", str(time.time()))
@@ -1064,6 +1151,22 @@ class Collector:
         if best is None or bestd > 300:
             return None
         return str(best.get("result") or "").lower() or None
+
+    async def _preclose_loop(self, page) -> None:
+        print("[preclose] boucle pre-cloture prete", flush=True)
+        while True:
+            try:
+                if os.getenv("IQ_PRECLOSE_ONLY", "1") == "1" and (
+                    self.db.get_meta("learn_auto") or "1"
+                ) == "1":
+                    await self._preclose_step(page)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[preclose] erreur: {exc}", flush=True)
+            await asyncio.sleep(1)
+
+    async def _preclose_step(self, page) -> None:
+        # Pre-cloture non utilisee dans la config actuelle (IQ_PRECLOSE_ONLY=0).
+        return
 
     async def _counter_loop(self, page) -> None:
         print("[counter] boucle contre-trade prete (T-4s)", flush=True)
@@ -1228,8 +1331,20 @@ class Collector:
             allowed = []
         # Methodes forcees par l'utilisateur (ex: 2 bougies vertes -> SELL).
         forced: dict = {}
+        raw_forced = os.getenv("IQ_FORCED_METHODS", "") or ""
+        if not raw_forced.strip():
+            forced = {n: (d, 300) for n, d in DEFAULT_ACTIVE}
+            try:
+                ad = json.loads(self.db.get_meta("adopted_methods") or "{}")
+                if isinstance(ad, dict):
+                    for _n, _d in ad.items():
+                        forced[str(_n)] = (
+                            _d if _d in ("BUY", "SELL") else "BUY",
+                            300,
+                        )
+            except Exception:  # noqa: BLE001
+                pass
         try:
-            raw_forced = os.getenv("IQ_FORCED_METHODS", "") or ""
             for part in raw_forced.split(","):
                 part = part.strip()
                 if not part:
@@ -1288,12 +1403,12 @@ class Collector:
         # Liste blanche LOGIQUE : on ne trade que les setups definis par
         # l'utilisateur (pas les figures generiques type doji/harami/engulfing).
         try:
-            logic_raw = (
-                os.getenv("IQ_LOGIC_METHODS", "bearish_hammer,green_upper_pin") or ""
-            ).strip()
+            logic_raw = (os.getenv("IQ_LOGIC_METHODS", "") or "").strip()
         except Exception:  # noqa: BLE001
-            logic_raw = "bearish_hammer,green_upper_pin"
-        if logic_raw in ("*", "extra"):
+            logic_raw = ""
+        if not logic_raw and forced:
+            logic = set(forced)
+        elif logic_raw in ("*", "extra"):
             # "*" = tous les motifs decouverts ; "extra" = uniquement les q*
             # (jeu haute reussite 68-72%).
             try:
@@ -1366,6 +1481,7 @@ class Collector:
                     pass
         # FILTRE LIVE : ne garder que les motifs qui gagnent reellement.
         live_ok = None
+        live_bad = None
         try:
             if os.getenv("IQ_LIVE_FILTER", "1") == "1":
                 min_n = int(os.getenv("IQ_LIVE_MIN_N", "3") or 3)
@@ -1397,6 +1513,23 @@ class Collector:
                 }
                 if ok:
                     live_ok = ok
+                # Methodes qui perdent sous le seuil defini -> a ecarter.
+                try:
+                    min_n_bad = int(os.getenv("IQ_METHOD_MIN_N", "10") or 10)
+                    min_rate_bad = float(os.getenv("IQ_METHOD_MIN_RATE", "55") or 55)
+                except ValueError:
+                    min_n_bad, min_rate_bad = 10, 55.0
+                bad = {
+                    t
+                    for t, (n, w) in st.items()
+                    if n >= min_n_bad and (100.0 * w / n) < min_rate_bad
+                }
+                if bad:
+                    live_bad = bad
+                    try:
+                        self.db.set_meta("disabled_methods", ",".join(sorted(bad)))
+                    except Exception:  # noqa: BLE001
+                        pass
         except Exception:  # noqa: BLE001
             live_ok = None
         if methods_only:
@@ -1654,6 +1787,22 @@ class Collector:
             aid = self.asset_ids.get(str(name).upper())
             return aid is not None and not self.asset_suspended.get(int(aid), False)
 
+        def _open_now(name: str) -> bool:
+            aid = self.asset_ids.get(str(name).upper())
+            if aid is None:
+                return False
+            sched = self.asset_schedule.get(int(aid))
+            if not sched:
+                return True
+            now_ts = time.time()
+            for w in sched:
+                try:
+                    if float(w.get("open", 0)) <= now_ts <= float(w.get("close", 0)):
+                        return True
+                except (TypeError, ValueError):
+                    continue
+            return False
+
         # Imitation generalisee : methode apprise appliquee a TOUTES les paires.
         # En reel -> toutes les paires tradables hors OTC (les OTC sont refuses
         # par IQ avec "Actif indisponible"). En demo -> toutes les OTC.
@@ -1672,7 +1821,7 @@ class Collector:
                 pool = [
                     n for n in self.asset_types if is_tradable(n) and n.endswith("-OTC")
                 ]
-            pool = [n for n in pool if _active(n)]
+            pool = [n for n in pool if _active(n) and _open_now(n)]
             pool.sort(key=lambda n: (-acount.get(n, 0), n))
             cands = pool[:max_pairs]
         # Imitation stricte : on ne surveille QUE les paires que tu as demontrees
@@ -1764,7 +1913,7 @@ class Collector:
                 await self._send_ws(page, json.dumps(sub))
                 self.auto_subscribed_tf.add(sub_key)
                 self.auto_sub_at[int(aid)] = time.time()
-            candles = self._candles_tf(asset, tf, 8)
+            candles = self._candles_tf(asset, tf, 60)
             if len(candles) < 3:
                 scan.append({"asset": asset, "bars": len(candles), "patterns": [], "matched": []})
                 continue
@@ -1809,6 +1958,23 @@ class Collector:
             # Filtre live : uniquement les motifs qui gagnent reellement.
             if live_ok:
                 inter = [p for p in inter if p in live_ok]
+            if live_bad:
+                inter = [p for p in inter if p not in live_bad]
+            # ALGO AGS CONTRA : AGS 3/4+ baissier + bougie live verte -> SELL.
+            try:
+                if os.getenv("IQ_AGS_CONTRA", "1") == "1" and closed:
+                    _fg = closed[-1]
+                    try:
+                        _green = float(_fg["close"]) > float(_fg["open"])
+                    except (KeyError, TypeError, ValueError):
+                        _green = False
+                    _bias, _bull, _bear, _f = self._ags_counts(asset)
+                    if _green and _bear >= 3:
+                        inter = ["ags_contra_sell"]
+                    elif (not _green) and _bull >= 3:
+                        inter = ["ags_contra_buy"]
+            except Exception:  # noqa: BLE001
+                pass
             scan.append({"asset": asset, "bars": len(candles), "patterns": hits, "matched": inter})
             # Mode pre-cloture actif : les ordres sont passes par _preclose_step (T-5s).
             if os.getenv("IQ_PRECLOSE_ONLY", "1") == "1" and not methods_only:
@@ -1827,7 +1993,10 @@ class Collector:
                 break
             if inter:
                 pat = inter[0]
-                if pat in forced:
+                if pat in ("ags_contra_sell", "ags_contra_buy"):
+                    direction = "SELL" if pat.endswith("sell") else "BUY"
+                    expiry = 300
+                elif pat in forced:
                     direction, expiry = forced[pat]
                 elif imitation_general:
                     direction = model_patterns.get(pat) or "BUY"
@@ -1850,47 +2019,158 @@ class Collector:
                     expiry = int(_fo)
             except Exception:  # noqa: BLE001
                 pass
+            # Duree : specifique AGS contra, sinon duree generale.
+            try:
+                if pat in ("ags_contra_sell", "ags_contra_buy"):
+                    _ae = int(self.db.get_meta("ags_contra_expiry") or 0)
+                    expiry = _ae if _ae > 0 else 300
+                else:
+                    _te = int(self.db.get_meta("trade_expiry") or 0)
+                    if _te > 0:
+                        expiry = _te
+                    else:
+                        expiry = 300
+            except (TypeError, ValueError):
+                pass
+            ags_txt = ""
+            # Filtre AGS TREND PRO + timing automatique.
+            try:
+                _is_ags = pat in ("ags_contra_sell", "ags_contra_buy")
+                if os.getenv("IQ_AGS_TREND_FILTER", "1") == "1" or _is_ags:
+                    _bias, _bull, _bear, _force = self._ags_counts(asset)
+                    _conv = max(_bull, _bear)
+                    if os.getenv("IQ_AGS_TREND_FILTER", "1") == "1":
+                        try:
+                            min_conv = int(os.getenv("IQ_AGS_TREND_MIN_CONV", "3") or 3)
+                        except ValueError:
+                            min_conv = 3
+                        if _conv < min_conv:
+                            continue
+                        if _bias == "HAUSSIERE" and direction != "BUY":
+                            continue
+                        if _bias == "BAISSIERE" and direction != "SELL":
+                            continue
+                    _auto_t = (self.db.get_meta("ags_auto_timing") or os.getenv("IQ_AGS_AUTO_TIMING", "1"))
+                    if _is_ags and str(_auto_t) == "1":
+                        # Durees compatibles avec le type d'option blitz (30/60s).
+                        if _conv >= 4:
+                            expiry = 60
+                        elif _conv == 3:
+                            expiry = 60 if _force in ("FORTE", "MOYENNE") else 30
+                        elif _conv == 2:
+                            expiry = 30
+                        else:
+                            continue
+                    ags_txt = f" · AGS {_bias} {_conv}/4 {_force}"
+            except Exception:  # noqa: BLE001
+                pass
+            # r2 : uniquement en session Londres/NY.
+            if pat in ("r2", "r3") and time.localtime().tm_hour not in (8, 9, 10, 11, 13, 14, 15, 16):
+                continue
             # Filtre expert : n'autoriser que certaines heures (sessions).
             if trade_hours and time.localtime().tm_hour not in trade_hours:
                 continue
             # SIGNAL : publier AVANT l'envoi pour que le dashboard l'affiche.
             try:
-                self.db.set_meta("auto_signal", f"{direction} {asset} {amount}$ ({pat})")
+                self.db.set_meta("auto_signal", f"{direction} {asset} {amount}$ ({pat}){ags_txt} · entrée T-2s · exp {expiry}s")
                 self.db.set_meta("auto_signal_ts", str(time.time()))
             except Exception:  # noqa: BLE001
                 pass
-            try:
-                payload = self._build_auto_message(direction, asset, amount, expiry)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[auto] build {asset}: {exc}", flush=True)
-                continue
+            cands = [expiry]
+            if expiry == 30:
+                for e in (45, 60):
+                    if e not in cands:
+                        cands.append(e)
             oid = None
             try:
                 oid = self.db.insert_order(
-                    asset, direction, amount, "auto",
-                    f"pattern={pat} exp={expiry}s",
+                    asset, direction, amount, "auto", f"pattern={pat} exp={expiry}s"
                 )
             except Exception:  # noqa: BLE001
                 oid = None
-            rid = str(payload.get("request_id") or "")
-            if oid is not None and rid:
-                self.pending_auto[rid] = (int(oid), asset)
-            sent = await self._send_ws(page, json.dumps(payload))
-            if oid is not None:
+            ok = False
+            last_err = None
+            for exp_c in cands:
+                try:
+                    payload = self._build_auto_message(direction, asset, amount, exp_c)
+                except Exception as exc:  # noqa: BLE001
+                    last_err = f"build: {exc}"
+                    break
+                rid = str(payload.get("request_id") or "")
+                sent = await self._send_ws(page, json.dumps(payload))
+                if not sent:
+                    await asyncio.sleep(0.4)
+                    sent = await self._send_ws(page, json.dumps(payload))
+                if not sent:
+                    last_err = "socket indisponible"
+                    break
+                result = await self._wait_order_result(rid, 5.0)
+                if result and result.get("success") and result.get("option_id") is not None:
+                    try:
+                        body = payload["msg"]["body"]
+                        precision = self.precisions.get(asset.upper(), 6)
+                        entry = None
+                        if body.get("value") is not None:
+                            entry = float(body["value"]) / (10 ** precision)
+                        win_return = None
+                        if result.get("profit_income") is not None:
+                            try:
+                                win_return = float(result["profit_income"]) / 100.0
+                            except (TypeError, ValueError):
+                                win_return = None
+                        if oid is not None:
+                            self.db.set_order_fill(
+                                int(oid), int(result["option_id"]), entry,
+                                body.get("expired"), win_return,
+                            )
+                            self.db.update_order_status(
+                                int(oid), "filled",
+                                f"pattern={pat} exp={exp_c}s | accepte pos #{result.get('option_id')}",
+                            )
+                        if self.db.get_sample(int(result["option_id"])) is None:
+                            self.db.add_sample(
+                                time.time(), int(result["option_id"]), asset,
+                                "CALL" if direction == "BUY" else "PUT", amount, entry,
+                                time.time() + int(exp_c), int(exp_c), pat, "",
+                                time.localtime().tm_hour, "auto",
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    ok = True
+                    expiry = exp_c
+                    break
+                err = str((result or {}).get("error") or "")
+                last_err = err or "confirmation non recue"
+                low = err.lower()
+                if ("expir" in low or "duration" in low or "size" in low) and exp_c != cands[-1]:
+                    continue
+                break
+            if not ok and oid is not None:
+                # Actif suspendu : l'ecarter pour les prochains cycles.
+                try:
+                    if last_err and "suspended" in str(last_err).lower():
+                        _aid = self.asset_ids.get(asset.upper())
+                        if _aid is not None:
+                            self.asset_suspended[int(_aid)] = True
+                except Exception:  # noqa: BLE001
+                    pass
                 try:
                     self.db.update_order_status(
-                        int(oid), "sent" if sent else "failed",
-                        f"pattern={pat} exp={expiry}s ws={sent}",
+                        int(oid), "failed",
+                        f"pattern={pat} | {str(last_err or 'echec')[:120]}",
                     )
                 except Exception:  # noqa: BLE001
                     pass
-                if not sent and rid:
-                    self.pending_auto.pop(rid, None)
+                try:
+                    self.db.set_meta("auto_last_error", f"{asset} — {str(last_err or 'echec')[:120]}")
+                    self.db.set_meta("auto_last_error_ts", str(time.time()))
+                except Exception:  # noqa: BLE001
+                    pass
             print(
-                f"[auto] {direction} {asset} {amount}$ "
-                f"pattern={pat} exp={expiry}s sent={sent}",
+                f"[auto] {direction} {asset} {amount}$ pattern={pat} exp={expiry}s ok={ok}",
                 flush=True,
             )
+            await asyncio.sleep(0.35)
             try:
                 self.db.set_meta("auto_last_signal", f"{direction} {asset} {amount}$ ({pat})")
                 self.db.set_meta("auto_last_trade_ts", str(time.time()))
@@ -1967,6 +2247,12 @@ class Collector:
         body["value"] = int(round(price * (10 ** precision)))
         body["expiration_size"] = int(expiry_size)
         body["expired"] = int(time.time()) + int(expiry_size)
+        if int(expiry_size) <= 60:
+            body["option_type_id"] = 12
+        elif int(expiry_size) <= 300:
+            body["option_type_id"] = 7
+        else:
+            body["option_type_id"] = 3
         body.setdefault("refund_value", 0)
         # Le bot suit le compte choisi (demo ou reel), avec les memes garde-fous.
         mode = (self.db.get_meta("order_account") or "demo").lower()
@@ -2234,6 +2520,8 @@ class Collector:
                 break
         except Exception:  # noqa: BLE001
             pass
+        if not patterns and source == "dashboard":
+            patterns = "manuel"
         hour = time.localtime().tm_hour
         # Timing dans la bougie de 5 min : ou l'utilisateur entre (offset) et
         # combien de secondes restent avant la cloture.
@@ -2302,6 +2590,10 @@ class Collector:
             self.order_results.setdefault(rid, {})["success"] = bool(msg.get("success"))
         elif name == "option" and isinstance(msg, dict):
             entry = self.order_results.setdefault(rid, {})
+            if msg.get("message") and msg.get("id") is None:
+                entry["success"] = False
+                entry["error"] = str(msg.get("message"))
+                return
             entry["option_id"] = msg.get("id")
             entry["status"] = msg.get("status")
             entry["direction"] = msg.get("direction")

@@ -154,6 +154,8 @@ class Database:
             acols = {row[1] for row in conn.execute("PRAGMA table_info(assets)").fetchall()}
             if "suspended" not in acols:
                 conn.execute("ALTER TABLE assets ADD COLUMN suspended INTEGER DEFAULT 0")
+            if "schedule" not in acols:
+                conn.execute("ALTER TABLE assets ADD COLUMN schedule TEXT")
             tcols = {row[1] for row in conn.execute("PRAGMA table_info(trader_samples)").fetchall()}
             for name, typ in (
                 ("entry_offset", "REAL"),
@@ -455,15 +457,16 @@ class Database:
         type_: Optional[str] = None,
         precision: Optional[int] = None,
         suspended: int = 0,
+        schedule: Optional[str] = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO assets (active_id, name, type, precision, suspended) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO assets (active_id, name, type, precision, suspended, schedule) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(active_id) DO UPDATE SET name = excluded.name, "
                 "type = excluded.type, precision = excluded.precision, "
-                "suspended = excluded.suspended",
-                (int(active_id), name, type_, precision, int(suspended or 0)),
+                "suspended = excluded.suspended, schedule = excluded.schedule",
+                (int(active_id), name, type_, precision, int(suspended or 0), schedule),
             )
 
     def get_asset_map(self) -> dict[int, str]:
@@ -475,7 +478,7 @@ class Database:
         """Catalogue complet des instruments IQ Option connus."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT active_id, name, type, precision, suspended FROM assets ORDER BY name"
+                "SELECT active_id, name, type, precision, suspended, schedule FROM assets ORDER BY name"
             ).fetchall()
         return [dict(r) for r in rows]
 
